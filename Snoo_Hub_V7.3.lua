@@ -1,5 +1,5 @@
 --========================================================
--- SNOO HUB 7.3
+-- SNOO HUB 
 -- LocalScript - StarterPlayerScripts
 --========================================================
 
@@ -10,58 +10,6 @@ local HttpService = game:GetService("HttpService")
 
 local Player = Players.LocalPlayer
 local PlayerGui = Player:WaitForChild("PlayerGui")
-
---========================================================
--- DROP / NO-JUMP (integrado de 35_Drop_logic_no_jump)
---========================================================
-local dropEnabled = false
-local _dropConns = {}
-
-local function ToggleSnooDrop(state)
-    dropEnabled = state == true
-    if dropEnabled then
-        for _, c in ipairs(_dropConns) do
-            if typeof(c) == "RBXScriptConnection" then c:Disconnect() end
-        end
-        table.clear(_dropConns)
-
-        local colConn = RunService.Stepped:Connect(function()
-            if not dropEnabled then return end
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= Player and p.Character then
-                    for _, part in ipairs(p.Character:GetChildren()) do
-                        if part:IsA("BasePart") then
-                            part.CanCollide = false
-                        end
-                    end
-                end
-            end
-        end)
-        table.insert(_dropConns, colConn)
-
-        task.spawn(function()
-            while dropEnabled do
-                RunService.Heartbeat:Wait()
-                local c = Player.Character
-                local root = c and c:FindFirstChild("HumanoidRootPart")
-                if not root then continue end
-
-                local vel = root.AssemblyLinearVelocity
-                root.AssemblyLinearVelocity = vel * 10000 + Vector3.new(0, 10000, 0)
-                RunService.RenderStepped:Wait()
-                if root and root.Parent then root.AssemblyLinearVelocity = vel end
-                RunService.Stepped:Wait()
-                if root and root.Parent then root.AssemblyLinearVelocity = vel + Vector3.new(0, 0.1, 0) end
-            end
-        end)
-    else
-        for _, c in ipairs(_dropConns) do
-            if typeof(c) == "RBXScriptConnection" then c:Disconnect() end
-        end
-        table.clear(_dropConns)
-    end
-end
-
 
 -- Fonte desejada: Luckywestguy.
 -- Se a fonte não estiver disponível no ambiente, Roblox usa Gotham como fallback.
@@ -119,8 +67,10 @@ local CancelTravel = false
 
 local StepTeleporting = false
 local CancelStepTeleport = false
+local SpamTPEnabled = false
+local SpamTPConnection = nil
 
-local ConfigFileName = "SnooHub_Config_V7.3.json"
+local ConfigFileName = "SnooHub_Config.json"
 local LoadedConfig = {}
 
 pcall(function()
@@ -148,7 +98,7 @@ InfiniteJumpEnabled = LoadedConfig.InfiniteJumpEnabled == true
 InstantPromptEnabled = LoadedConfig.InstantPromptEnabled == true
 PromptTeleportEnabled = LoadedConfig.PromptTeleportEnabled == true
 FPSBoostEnabled = LoadedConfig.FPSBoostEnabled == true
-dropEnabled = LoadedConfig.SnooDropEnabled == true
+SpamTPEnabled = LoadedConfig.SpamTPEnabled == true
 
 UndergroundDepth = 25
 
@@ -268,7 +218,7 @@ local Subtitle = Instance.new("TextLabel")
 Subtitle.Size = UDim2.new(1, -120, 0, 18)
 Subtitle.Position = UDim2.fromOffset(44, 25)
 Subtitle.BackgroundTransparency = 1
-Subtitle.Text = "EPIC BRAINROT 2.0 • V7.3"
+Subtitle.Text = "EPIC BRAINROT 2.0"
 Subtitle.TextColor3 = Color3.fromRGB(190, 90, 255)
 Subtitle.TextSize = 7
 Subtitle.Font = UI_FONT
@@ -514,7 +464,7 @@ local StealBarFill = nil
 local StealPercentLabel = nil
 local StealStateLabel = nil
 local StealStartTime = nil
-local StealDuration = ApplyLoadedNumber("StealDuration", 0.15, 0.05, 10)
+local StealDuration = ApplyLoadedNumber("StealDuration", 1.4, 0.1, 10)
 local StealRadius = ApplyLoadedNumber("StealRadius", 60, 1, 500)
 local IsStealing = false
 local StealData = {}
@@ -708,13 +658,13 @@ local UndergroundControlButton = UndergroundButton
 Label("TP SPEED • STUDS/SEGUNDO")
 local TPBox = TextBox("20", "TP SPEED (studs/segundo)")
 local TPButton = Button("  TP POR PASSOS • IR")
+local SpamTPButton = Button("  SPAM TP • OFF")
 
 SelectPage("Utility")
 Section("OUTROS")
 local NoclipButton = Button("  NOCLIP • OFF")
 local AntiRagdollButton = Button("  ANTI-RAGDOLL • OFF")
 local FPSButton = Button("  FPS BOOST • OFF")
-local DropButton = Button("  DROP • OFF")
 
 Section("PROXIMITY PROMPT")
 local PromptButton = Button("  INSTANT PROMPT • OFF")
@@ -859,24 +809,18 @@ local function StartTravel()
         -- 2. Vai por baixo até ficar alinhado com o destino.
         local Across = Vector3.new(Destination.X, UndergroundY, Destination.Z)
 
-        -- 3. Sobe exatamente até a altura salva (sem impulso no final).
-        local Release = Vector3.new(Destination.X, Destination.Y, Destination.Z)
+        -- 3. Sobe 10 studs acima da altura salva.
+        local Release = Vector3.new(Destination.X, Destination.Y + 10, Destination.Z)
 
         if MoveCFrame(Down) and MoveCFrame(Across) then
             MoveCFrame(Release)
         end
 
         if Traveling and not CancelTravel and Root and Root.Parent then
-            -- Finaliza no CFrame salvo e limpa toda velocidade para evitar o lançamento.
-            Root.CFrame = TargetCFrame
+            -- Mantém exatamente 10 studs acima e então devolve o controle ao player.
+            Root.CFrame = CFrame.new(Release)
             Root.AssemblyLinearVelocity = Vector3.zero
             Root.AssemblyAngularVelocity = Vector3.zero
-            RunService.Heartbeat:Wait()
-            if Root and Root.Parent then
-                Root.CFrame = TargetCFrame
-                Root.AssemblyLinearVelocity = Vector3.zero
-                Root.AssemblyAngularVelocity = Vector3.zero
-            end
         end
     else
         MoveCFrame(Destination)
@@ -896,6 +840,56 @@ TravelButton.MouseButton1Click:Connect(function()
 		task.spawn(StartTravel)
 	end
 end)
+
+local function GetCurrentRoot()
+	local CharacterNow = Player.Character
+	if not CharacterNow then return nil end
+	return CharacterNow:FindFirstChild("HumanoidRootPart")
+end
+
+local function StopSpamTP()
+	SpamTPEnabled = false
+	if SpamTPConnection then
+		task.cancel(SpamTPConnection)
+		SpamTPConnection = nil
+	end
+	SpamTPButton.Text = "  SPAM TP • OFF"
+	if SpamTPButtonSmall then SpamTPButtonSmall.Text = "SPAM TP • OFF" end
+	if SaveConfig then SaveConfig() end
+end
+
+local function StartSpamTP()
+	if SpamTPConnection then return end
+	local Target = FloatingSavedPosition or GetSafeSavedCFrame()
+	if not IsValidCFrame(Target) then
+		SpamTPButton.Text = "  SALVE UM LOCAL"
+		task.delay(1.2, function()
+			if SpamTPButton.Parent then SpamTPButton.Text = "  SPAM TP • OFF" end
+		end)
+		SpamTPEnabled = false
+		return
+	end
+
+	SpamTPEnabled = true
+	SpamTPButton.Text = "  SPAM TP • ON"
+	if SpamTPButtonSmall then SpamTPButtonSmall.Text = "SPAM TP • ON" end
+	SpamTPConnection = task.spawn(function()
+		while SpamTPEnabled and Gui and Gui.Parent do
+			local CurrentTarget = FloatingSavedPosition or GetSafeSavedCFrame()
+			local CurrentRoot = GetCurrentRoot()
+			if CurrentRoot and IsValidCFrame(CurrentTarget) then
+				pcall(function()
+					CurrentRoot.CFrame = CurrentTarget
+					CurrentRoot.AssemblyLinearVelocity = Vector3.zero
+					CurrentRoot.AssemblyAngularVelocity = Vector3.zero
+				end)
+			end
+			task.wait(0.12)
+		end
+		SpamTPConnection = nil
+	end)
+	if SaveConfig then SaveConfig() end
+end
 
 local function StartStepTeleport()
 	if StepTeleporting then return end
@@ -961,6 +955,15 @@ TPButton.MouseButton1Click:Connect(function()
 		CancelStepTeleport = true
 	else
 		task.spawn(StartStepTeleport)
+	end
+end)
+
+
+SpamTPButton.MouseButton1Click:Connect(function()
+	if SpamTPEnabled then
+		StopSpamTP()
+	else
+		StartSpamTP()
 	end
 end)
 
@@ -1089,12 +1092,6 @@ workspace.DescendantAdded:Connect(function(Object)
 	end)
 end)
 
-DropButton.MouseButton1Click:Connect(function()
-    ToggleSnooDrop(not dropEnabled)
-    DropButton.Text = "  DROP • " .. (dropEnabled and "ON" or "OFF")
-    if SaveConfig then SaveConfig() end
-end)
-
 NoclipButton.MouseButton1Click:Connect(function()
 	NoclipEnabled = not NoclipEnabled
 
@@ -1145,6 +1142,7 @@ end
 AutoStealButton.MouseButton1Click:Connect(function()
 	AutoStealEnabled = not AutoStealEnabled
 	AutoStealButton.Text = "  AUTO STEAL • " .. (AutoStealEnabled and "ON" or "OFF")
+SpamTPButton.Text = "  SPAM TP • " .. (SpamTPEnabled and "ON" or "OFF")
 	if AutoStealEnabled then StartAutoSteal() else StopAutoSteal() end
 	if SaveConfig then SaveConfig() end
 end)
@@ -1464,7 +1462,7 @@ FloatingTPGui.Parent = PlayerGui
 
 local FloatingTP = Instance.new("Frame")
 FloatingTP.Name = "FloatingTP"
-FloatingTP.Size = UDim2.fromOffset(172, 146)
+FloatingTP.Size = UDim2.fromOffset(172, 140)
 FloatingTP.Position = UDim2.fromOffset(
 	type(LoadedConfig.FloatingXOffset) == "number" and LoadedConfig.FloatingXOffset or 20,
 	type(LoadedConfig.FloatingYOffset) == "number" and LoadedConfig.FloatingYOffset or 300
@@ -1531,19 +1529,20 @@ TravelButtonSmall.Font = Enum.Font.GothamBold
 TravelButtonSmall.AutoButtonColor = false
 TravelButtonSmall.Parent = FloatingTP
 
-local UndergroundSmallButton = Instance.new("TextButton")
-UndergroundSmallButton.Size = UDim2.new(1, -12, 0, 28)
-UndergroundSmallButton.Position = UDim2.fromOffset(6, 92)
-UndergroundSmallButton.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
-UndergroundSmallButton.BorderSizePixel = 0
-UndergroundSmallButton.Text = "UNDERGROUND • " .. (UndergroundEnabled and "ON" or "OFF")
-UndergroundSmallButton.TextColor3 = Color3.fromRGB(245, 245, 245)
-UndergroundSmallButton.TextSize = 8
-UndergroundSmallButton.Font = Enum.Font.GothamBold
-UndergroundSmallButton.AutoButtonColor = false
-UndergroundSmallButton.Parent = FloatingTP
 
-for _, ButtonObject in ipairs({SaveTPButton, TPButtonSmall, TravelButtonSmall, UndergroundSmallButton}) do
+local SpamTPButtonSmall = Instance.new("TextButton")
+SpamTPButtonSmall.Size = UDim2.new(1, -12, 0, 28)
+SpamTPButtonSmall.Position = UDim2.fromOffset(6, 92)
+SpamTPButtonSmall.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+SpamTPButtonSmall.BorderSizePixel = 0
+SpamTPButtonSmall.Text = "SPAM TP • OFF"
+SpamTPButtonSmall.TextColor3 = Color3.fromRGB(245, 245, 245)
+SpamTPButtonSmall.TextSize = 8
+SpamTPButtonSmall.Font = Enum.Font.GothamBold
+SpamTPButtonSmall.AutoButtonColor = false
+SpamTPButtonSmall.Parent = FloatingTP
+
+for _, ButtonObject in ipairs({SaveTPButton, TPButtonSmall, TravelButtonSmall, SpamTPButtonSmall}) do
 	local ButtonCorner = Instance.new("UICorner")
 	ButtonCorner.CornerRadius = UDim.new(0, 8)
 	ButtonCorner.Parent = ButtonObject
@@ -1572,7 +1571,6 @@ end
 SaveConfig = function()
 	if not writefile then return end
 	local Data = {
-        Version = "7.3",
 		WalkValue = WalkValue,
 		JumpValue = JumpValue,
 		TravelValue = TravelValue,
@@ -1587,12 +1585,13 @@ SaveConfig = function()
 		InstantPromptEnabled = InstantPromptEnabled,
 PromptTeleportEnabled = PromptTeleportEnabled,
 UndergroundEnabled = UndergroundEnabled,
-SnooDropEnabled = dropEnabled,
+SnooDropEnabled = SnooDropEnabled,
 FloatingButtonsEnabled = FloatingButtonsEnabled,
 UndergroundTravelEnabled = UndergroundTravelEnabled,
 UndergroundDepth = UndergroundDepth,
 		FPSBoostEnabled = FPSBoostEnabled,
 		AutoStealEnabled = AutoStealEnabled,
+		SpamTPEnabled = SpamTPEnabled,
 		SavedTP = (function()
 			if not FloatingSavedPosition then return nil end
 			return {FloatingSavedPosition:GetComponents()}
@@ -1601,15 +1600,6 @@ UndergroundDepth = UndergroundDepth,
 		FloatingXOffset = FloatingTP.Position.X.Offset,
 		FloatingYScale = 0,
 		FloatingYOffset = FloatingTP.Position.Y.Offset,
-        FloatingButtonPositions = (function()
-            local Out = {}
-            for Key, Pos in pairs(FloatingButtonPositions) do
-                if typeof(Pos) == "UDim2" then
-                    Out[Key] = {X = Pos.X.Offset, Y = Pos.Y.Offset}
-                end
-            end
-            return Out
-        end)(),
 	}
 	pcall(function() writefile(ConfigFileName, HttpService:JSONEncode(Data)) end)
 end
@@ -1689,13 +1679,6 @@ TravelButtonSmall.MouseButton1Click:Connect(function()
 	end)
 end)
 
-
-UndergroundSmallButton.MouseButton1Click:Connect(function()
-    UndergroundEnabled = not UndergroundEnabled
-    UndergroundSmallButton.Text = "UNDERGROUND • " .. (UndergroundEnabled and "ON" or "OFF")
-    UndergroundButton.Text = "  UNDERGROUND (UG) • " .. (UndergroundEnabled and "ON" or "OFF")
-    if SaveConfig then SaveConfig() end
-end)
 
 local FloatingDragging = false
 local FloatingDragStart = nil
@@ -1808,15 +1791,15 @@ CreateFloatingFeatureButton("PromptTP", "PROMPT TP", function() return PromptTel
     function(v) PromptTeleportEnabled = v; PromptTeleportButton.Text = "  PROMPT → LOCAL SALVO • " .. (v and "ON" or "OFF") end, 235)
 CreateFloatingFeatureButton("Underground", "UG", function() return UndergroundEnabled end,
     function(v) UndergroundEnabled = v; UndergroundButton.Text = "  UNDERGROUND (UG) • " .. (v and "ON" or "OFF") end, 270)
-CreateFloatingFeatureButton("Drop", "DROP", function() return dropEnabled end,
-    function(v) dropEnabled = v; ToggleSnooDrop(v) end, 305)
+CreateFloatingFeatureButton("Drop", "DROP", function() return SnooDropEnabled end,
+    function(v) SnooDropEnabled = v; ToggleSnooDrop(v) end, 305)
 
 
 
 
--- ==================== JSON CONFIG • SNOO HUB V7.3 ====================
+-- ==================== JSON CONFIG • SNOO HUB V7.1 ====================
 local HttpService = game:GetService("HttpService")
-local CONFIG_FILE = "Snoo_Hub_Config_V7.3.json"
+local CONFIG_FILE = "Snoo_Hub_Config_V7.1.json"
 
 local function CanUseFileAPI()
     return type(writefile) == "function" and type(isfile) == "function"
@@ -1825,7 +1808,7 @@ end
 
 local function BuildJSONConfig()
     return {
-        Version = "7.3",
+        Version = "7.1",
         WalkEnabled = WalkEnabled,
         WalkValue = WalkValue,
         JumpEnabled = JumpEnabled,
@@ -1836,19 +1819,11 @@ local function BuildJSONConfig()
         PromptTeleportEnabled = PromptTeleportEnabled,
         InstantPromptEnabled = InstantPromptEnabled,
         UndergroundEnabled = UndergroundEnabled,
-        SnooDropEnabled = dropEnabled,
+        SnooDropEnabled = SnooDropEnabled,
         AutoStealEnabled = AutoStealEnabled,
         TravelValue = TravelValue,
         FloatingButtonsEnabled = FloatingButtonsEnabled,
-        FloatingButtonPositions = (function()
-            local Out = {}
-            for Key, Pos in pairs(FloatingButtonPositions) do
-                if typeof(Pos) == "UDim2" then
-                    Out[Key] = {X = Pos.X.Offset, Y = Pos.Y.Offset}
-                end
-            end
-            return Out
-        end)()
+        FloatingButtonPositions = FloatingButtonPositions
     }
 end
 
@@ -1877,13 +1852,6 @@ pcall(LoadJSONConfig)
 local FloatingButtons = {}
 local FloatingButtonPositions = {}
 local FloatingButtonsEnabled = {}
-if type(LoadedConfig.FloatingButtonPositions) == "table" then
-    for Key, Pos in pairs(LoadedConfig.FloatingButtonPositions) do
-        if type(Pos) == "table" and type(Pos.X) == "number" and type(Pos.Y) == "number" then
-            FloatingButtonPositions[Key] = UDim2.fromOffset(Pos.X, Pos.Y)
-        end
-    end
-end
 
 local ButtonsPage = CreatePage("Buttons")
 CreateTab("Buttons", "BUTTONS")
@@ -1895,56 +1863,20 @@ local ButtonDefinitions = {
         function(v) PromptTeleportEnabled = v; PromptTeleportButton.Text = "  PROMPT → LOCAL SALVO • " .. (v and "ON" or "OFF") end},
     {"Underground", "UNDERGROUND (UG)", function() return UndergroundEnabled end,
         function(v) UndergroundEnabled = v; UndergroundButton.Text = "  UNDERGROUND (UG) • " .. (v and "ON" or "OFF") end},
-    {"Drop", "DROP", function() return dropEnabled end,
-        function(v) dropEnabled = v; ToggleSnooDrop(v) end},
+    {"Drop", "DROP", function() return SnooDropEnabled end,
+        function(v) SnooDropEnabled = v; ToggleSnooDrop(v) end},
     {"Speed", "WALK SPEED", function() return WalkEnabled end,
-        function(v)
-            WalkEnabled = v
-            if Humanoid then
-                if v then
-                    local n = tonumber(WalkBox.Text)
-                    if n then WalkValue = math.clamp(n, 1, 500) end
-                    OriginalWalkSpeed = OriginalWalkSpeed or Humanoid.WalkSpeed
-                    Humanoid.WalkSpeed = WalkValue
-                elseif OriginalWalkSpeed ~= nil then
-                    Humanoid.WalkSpeed = OriginalWalkSpeed
-                end
-            end
-            SpeedButton.Text = "  WALK SPEED • " .. (v and "ON" or "OFF")
-        end},
+        function(v) WalkEnabled = v; ApplyWalkSpeed(); SpeedButton.Text = "  WALK SPEED • " .. (v and "ON" or "OFF") end},
     {"Jump", "JUMP POWER", function() return JumpEnabled end,
-        function(v)
-            JumpEnabled = v
-            if Humanoid then
-                if v then
-                    local n = tonumber(JumpBox.Text)
-                    if n then JumpValue = math.clamp(n, 1, 500) end
-                    OriginalJumpPower = OriginalJumpPower or Humanoid.JumpPower
-                    Humanoid.UseJumpPower = true
-                    Humanoid.JumpPower = JumpValue
-                elseif OriginalJumpPower ~= nil then
-                    Humanoid.UseJumpPower = true
-                    Humanoid.JumpPower = OriginalJumpPower
-                end
-            end
-            JumpButton.Text = "  JUMP POWER • " .. (v and "ON" or "OFF")
-        end},
+        function(v) JumpEnabled = v; ApplyJumpPower(); JumpButton.Text = "  JUMP POWER • " .. (v and "ON" or "OFF") end},
     {"Noclip", "NOCLIP", function() return NoclipEnabled end,
         function(v) NoclipEnabled = v; NoclipButton.Text = "  NOCLIP • " .. (v and "ON" or "OFF") end},
     {"AntiRagdoll", "ANTI-RAGDOLL", function() return AntiRagdollEnabled end,
         function(v) AntiRagdollEnabled = v; AntiRagdollButton.Text = "  ANTI-RAGDOLL • " .. (v and "ON" or "OFF") end},
     {"InfinityJump", "INFINITY JUMP", function() return InfiniteJumpEnabled end,
-        function(v)
-            InfiniteJumpEnabled = v
-            if v then StartInfiniteJump() else StopInfiniteJump() end
-            InfiniteButton.Text = "  INFINITY JUMP • " .. (v and "ON" or "OFF")
-        end},
+        function(v) InfiniteJumpEnabled = v; InfiniteButton.Text = "  INFINITY JUMP • " .. (v and "ON" or "OFF"); if v then StartInfiniteJump() end end},
     {"AutoSteal", "AUTO STEAL", function() return AutoStealEnabled end,
-        function(v)
-            AutoStealEnabled = v
-            if v then StartAutoSteal() else StopAutoSteal() end
-            AutoStealButton.Text = "  AUTO STEAL • " .. (v and "ON" or "OFF")
-        end},
+        function(v) AutoStealEnabled = v; AutoStealButton.Text = "  AUTO STEAL • " .. (v and "ON" or "OFF"); if v then StartAutoSteal() end end},
 }
 
 local function CreateFloatingFeatureButton(Key, Name, GetState, SetState, DefaultY)
@@ -2036,11 +1968,7 @@ Description("Use ADICIONAR/REMOVER para escolher quais aparecem. O botão da tel
 
 for Index, Def in ipairs(ButtonDefinitions) do
     local Key, Name, GetState, SetState = table.unpack(Def)
-    if type(LoadedConfig.FloatingButtonsEnabled) == "table" and LoadedConfig.FloatingButtonsEnabled[Key] ~= nil then
-        FloatingButtonsEnabled[Key] = LoadedConfig.FloatingButtonsEnabled[Key] == true
-    else
-        FloatingButtonsEnabled[Key] = false
-    end
+    FloatingButtonsEnabled[Key] = false
 
     local AddRemove = Button("  " .. Name .. " • ADICIONAR")
     AddRemove.MouseButton1Click:Connect(function()
@@ -2058,7 +1986,6 @@ for Index, Def in ipairs(ButtonDefinitions) do
 
         if SaveConfig then SaveConfig() end
     end)
-    AddRemove.Text = "  " .. Name .. " • " .. (FloatingButtonsEnabled[Key] and "REMOVER" or "ADICIONAR")
 end
 
 SelectPage("Movement")
@@ -2072,9 +1999,6 @@ task.defer(function()
             end
         end
         RefreshFloatingButtons()
-        if UndergroundSmallButton and UndergroundSmallButton.Parent then
-            UndergroundSmallButton.Text = "UNDERGROUND • " .. (UndergroundEnabled and "ON" or "OFF")
-        end
     end
 end)
 
@@ -2090,13 +2014,13 @@ AntiRagdollButton.Text = "  ANTI-RAGDOLL • " .. (AntiRagdollEnabled and "ON" o
 PromptButton.Text = "  INSTANT PROMPT • " .. (InstantPromptEnabled and "ON" or "OFF")
 PromptTeleportButton.Text = "  PROMPT → LOCAL SALVO • " .. (PromptTeleportEnabled and "ON" or "OFF")
 FPSButton.Text = "  FPS BOOST • " .. (FPSBoostEnabled and "ON" or "OFF")
-DropButton.Text = "  DROP • " .. (dropEnabled and "ON" or "OFF")
 AutoStealButton.Text = "  AUTO STEAL • " .. (AutoStealEnabled and "ON" or "OFF")
 InfiniteButton.Text = "  INFINITY JUMP • " .. (InfiniteJumpEnabled and "ON" or "OFF")
 
 
-if dropEnabled then ToggleSnooDrop(true) end
+if SnooDropEnabled then ToggleSnooDrop(true) end
 if AutoStealEnabled then StartAutoSteal() end
+if SpamTPEnabled then StartSpamTP() end
 if InfiniteJumpEnabled then StartInfiniteJump() end
 if InstantPromptEnabled then UpdatePrompts() end
 if FPSBoostEnabled then
