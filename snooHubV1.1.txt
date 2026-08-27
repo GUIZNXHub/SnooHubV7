@@ -1,0 +1,2132 @@
+--========================================================
+-- SNOO HUB V1.1
+-- Preferências editáveis + Lista atualizada
+-- Linha visível + Nome em todos os Brainrots
+-- LocalScript / Executor
+--========================================================
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+
+local UI_FONT = Enum.Font.GothamBlack
+local BACKGROUND_ID = "rbxassetid://92235193275042"
+local LOGO_ID = "rbxassetid://109807470527334"
+
+local Character, Humanoid, Root
+local WalkEnabled, JumpEnabled, NoclipEnabled = false, false, false
+local NoclipOriginals = {}
+local AntiRagdollEnabled, InfiniteJumpEnabled, InstantPromptEnabled = false, false, false
+local FPSBoostEnabled, UltraESPEnabled = false, false
+local BestBeam = nil
+local PerformanceMode = "Ultra"
+local PerformanceConfig = {
+	DisableParticles = true,
+	DisablePostEffects = true,
+	DisableTrailsBeams = true,
+	DisableShadows = true,
+	LowGraphicsQuality = true,
+}
+
+local WalkValue, JumpValue, TravelValue, TPValue = 110, 100, 110, 20
+local OriginalWalkSpeed, OriginalJumpPower = nil, nil
+local SavedPosition, FloatingSavedPosition = nil, nil
+local SaveConfig = nil
+
+local function IsValidCFrame(Value)
+	if typeof(Value) ~= "CFrame" then return false end
+	local P = Value.Position
+	return P.X == P.X and P.Y == P.Y and P.Z == P.Z
+		and math.abs(P.X) < 100000 and math.abs(P.Y) < 100000 and math.abs(P.Z) < 100000
+end
+
+local function GetSafeSavedCFrame()
+	if IsValidCFrame(SavedPosition) then return SavedPosition end
+	SavedPosition = nil
+	return nil
+end
+
+local Traveling, CancelTravel = false, false
+local StepTeleporting, CancelStepTeleport = false, false
+
+local ConfigFileName = "SnooHub6_Config.json"
+local LoadedConfig = {}
+local Language = "pt-BR"
+
+pcall(function()
+	if type(isfile) == "function" and type(readfile) == "function" and isfile(ConfigFileName) then
+		local Data = HttpService:JSONDecode(readfile(ConfigFileName))
+		if type(Data) == "table" then LoadedConfig = Data end
+	end
+end)
+
+local function ApplyLoadedNumber(Key, Default, Min, Max)
+	local Value = tonumber(LoadedConfig[Key])
+	if Value then return math.clamp(Value, Min, Max) end
+	return Default
+end
+
+WalkValue = ApplyLoadedNumber("WalkValue", WalkValue, 1, 500)
+JumpValue = ApplyLoadedNumber("JumpValue", JumpValue, 1, 500)
+TravelValue = ApplyLoadedNumber("TravelValue", TravelValue, 1, 1000)
+TPValue = ApplyLoadedNumber("TPValue", TPValue, 1, 200)
+WalkEnabled = LoadedConfig.WalkEnabled == true
+JumpEnabled = LoadedConfig.JumpEnabled == true
+NoclipEnabled = LoadedConfig.NoclipEnabled == true
+AntiRagdollEnabled = LoadedConfig.AntiRagdollEnabled == true
+InfiniteJumpEnabled = LoadedConfig.InfiniteJumpEnabled == true
+InstantPromptEnabled = LoadedConfig.InstantPromptEnabled == true
+FPSBoostEnabled = LoadedConfig.FPSBoostEnabled == true
+PerformanceMode = tostring(LoadedConfig.PerformanceMode or "Ultra")
+if PerformanceMode ~= "Balanced" and PerformanceMode ~= "Ultra" and PerformanceMode ~= "Extreme" then
+	PerformanceMode = "Ultra"
+end
+
+-- ==================== LISTA DE PREFERÊNCIA (EDITÁVEL) ====================
+local DefaultPriorityList = {
+	"Spyder Elephant",
+	"Strawberry Elephant",
+	"Headless Horseman",
+	"Meowl",
+	"John Pork",
+	"Skibid Toilet",
+	"Dragon Gingerine",
+	"Hydra Dragon Canneloni",
+	"Dragon Aquanini",
+	"Arcadragon",
+	"Signore Carapace",
+	"Antonio",
+	"La Supreme Combinasion",
+	"Love Love Bear",
+	"Elefanto Frigo",
+	"Dug Dug Dug",
+	"Griffin",
+	"La Casa Boo",
+	"Ginger Gerat",
+	"Ketupat bros",
+	"Fragola La La La",
+	"La Food Combinasion",
+	"Garama and Madundung",
+	"La grande Combinasion",
+	"Cash or Card",
+	"Pizza and Ranch",
+	"Cerberus",
+}
+
+local PriorityList = {}
+
+-- Carrega do config ou usa o padrão
+if type(LoadedConfig.PriorityList) == "table" and #LoadedConfig.PriorityList > 0 then
+	for _, name in ipairs(LoadedConfig.PriorityList) do
+		if type(name) == "string" and name ~= "" then
+			table.insert(PriorityList, name)
+		end
+	end
+end
+if #PriorityList == 0 then
+	for _, name in ipairs(DefaultPriorityList) do
+		table.insert(PriorityList, name)
+	end
+end
+
+local function NormalizeName(Value)
+	Value = string.lower(tostring(Value or ""))
+	Value = Value:gsub("[%c%p]", " "):gsub("%s+", " ")
+	return Value:match("^%s*(.-)%s*$") or ""
+end
+
+local function GetPriorityOf(Name)
+	local norm = NormalizeName(Name)
+	for i, entry in ipairs(PriorityList) do
+		if NormalizeName(entry) == norm then
+			return i
+		end
+	end
+	return nil
+end
+
+local function RebuildPriorityMap()
+	-- só para uso interno se precisar
+end
+
+local function SetupCharacter(CharacterObject)
+	Character = CharacterObject
+	Humanoid = Character:WaitForChild("Humanoid")
+	Root = Character:WaitForChild("HumanoidRootPart")
+	if WalkEnabled then Humanoid.WalkSpeed = WalkValue end
+	if JumpEnabled then
+		Humanoid.UseJumpPower = true
+		Humanoid.JumpPower = JumpValue
+	end
+end
+
+if Player.Character then SetupCharacter(Player.Character) end
+Player.CharacterAdded:Connect(SetupCharacter)
+
+local Existing = PlayerGui:FindFirstChild("SnooHub6")
+if Existing then Existing:Destroy() end
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "Snoo Hub"
+Gui.ResetOnSpawn = false
+Gui.IgnoreGuiInset = true
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+Gui.Parent = PlayerGui
+
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.fromOffset(540, 420)
+Main.Position = UDim2.new(0.5, -270, 0.5, -210)
+Main.BackgroundColor3 = Color3.fromRGB(12, 12, 15)
+Main.BorderSizePixel = 0
+Main.ClipsDescendants = true
+Main.Active = true
+Main.Parent = Gui
+
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 12)
+local MainStroke = Instance.new("UIStroke", Main)
+MainStroke.Color = Color3.fromRGB(155, 70, 255)
+MainStroke.Transparency = 0.05
+MainStroke.Thickness = 2
+
+local Background = Instance.new("ImageLabel", Main)
+Background.Size = UDim2.fromScale(1, 1)
+Background.BackgroundTransparency = 1
+Background.Image = BACKGROUND_ID
+Background.ImageTransparency = 0.95
+Background.ScaleType = Enum.ScaleType.Crop
+Background.ZIndex = 0
+Instance.new("UICorner", Background).CornerRadius = UDim.new(0, 12)
+
+local Header = Instance.new("Frame", Main)
+Header.Size = UDim2.new(1, 0, 0, 58)
+Header.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+Header.ClipsDescendants = true
+Header.Active = true
+Header.ZIndex = 5
+
+local HeaderGradient = Instance.new("UIGradient", Header)
+HeaderGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(32, 20, 45)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 18, 22))
+})
+HeaderGradient.Rotation = 15
+
+local Logo = Instance.new("ImageLabel", Header)
+Logo.Size = UDim2.fromOffset(28, 28)
+Logo.Position = UDim2.fromOffset(8, 8)
+Logo.BackgroundColor3 = Color3.fromRGB(20, 18, 25)
+Logo.BackgroundTransparency = 0.1
+Logo.BorderSizePixel = 0
+Logo.Image = LOGO_ID
+Logo.ScaleType = Enum.ScaleType.Fit
+Logo.ZIndex = 6
+Instance.new("UICorner", Logo).CornerRadius = UDim.new(0, 12)
+
+local Title = Instance.new("TextLabel", Header)
+Title.Size = UDim2.new(1, -120, 0, 30)
+Title.Position = UDim2.fromOffset(43, 3)
+Title.BackgroundTransparency = 1
+Title.Text = "Snoo Hub"
+Title.TextColor3 = Color3.fromRGB(245, 245, 250)
+Title.TextSize = 17
+Title.Font = UI_FONT
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.ZIndex = 6
+
+local Subtitle = Instance.new("TextLabel", Header)
+Subtitle.Size = UDim2.new(1, -120, 0, 18)
+Subtitle.Position = UDim2.fromOffset(44, 25)
+Subtitle.BackgroundTransparency = 1
+Subtitle.Text = "EPIC BRAINROT 2.0"
+Subtitle.TextColor3 = Color3.fromRGB(190, 90, 255)
+Subtitle.TextSize = 7
+Subtitle.Font = UI_FONT
+Subtitle.TextXAlignment = Enum.TextXAlignment.Left
+Subtitle.ZIndex = 6
+
+local Minimize = Instance.new("TextButton", Header)
+Minimize.Size = UDim2.fromOffset(28, 24)
+Minimize.Position = UDim2.new(1, -36, 0, 9)
+Minimize.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+Minimize.BorderSizePixel = 0
+Minimize.Text = "—"
+Minimize.TextColor3 = Color3.fromRGB(255, 255, 255)
+Minimize.TextSize = 15
+Minimize.Font = UI_FONT
+Minimize.ZIndex = 7
+Instance.new("UICorner", Minimize).CornerRadius = UDim.new(0, 10)
+
+local Content = Instance.new("ScrollingFrame", Main)
+Content.Name = "Content"
+Content.Size = UDim2.new(1, -20, 1, -112)
+Content.Position = UDim2.fromOffset(10, 106)
+Content.BackgroundTransparency = 1
+Content.BorderSizePixel = 0
+Content.ScrollBarThickness = 3
+Content.ScrollBarImageColor3 = Color3.fromRGB(155, 70, 255)
+Content.CanvasSize = UDim2.new(0, 0, 0, 0)
+Content.ZIndex = 3
+
+local TabBar = Instance.new("Frame", Main)
+TabBar.Name = "TabBar"
+TabBar.Size = UDim2.new(1, -20, 0, 32)
+TabBar.Position = UDim2.fromOffset(10, 68)
+TabBar.BackgroundTransparency = 1
+TabBar.ZIndex = 6
+
+local TabLayout = Instance.new("UIListLayout", TabBar)
+TabLayout.FillDirection = Enum.FillDirection.Horizontal
+TabLayout.Padding = UDim.new(0, 6)
+
+local Pages = {}
+local CurrentPage, CurrentLayout
+
+local function CreatePage(Name)
+	local Page = Instance.new("ScrollingFrame")
+	Page.Name = Name .. "Page"
+	Page.Size = UDim2.fromScale(1, 1)
+	Page.BackgroundTransparency = 1
+	Page.BorderSizePixel = 0
+	Page.ScrollBarThickness = 3
+	Page.ScrollBarImageColor3 = Color3.fromRGB(155, 70, 255)
+	Page.CanvasSize = UDim2.new(0, 0, 0, 0)
+	Page.Visible = false
+	Page.ZIndex = 4
+	Page.Parent = Content
+	local PageLayout = Instance.new("UIListLayout", Page)
+	PageLayout.Padding = UDim.new(0, 4)
+	PageLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	PageLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	Pages[Name] = {Frame = Page, Layout = PageLayout}
+	return Page
+end
+
+local function SelectPage(Name)
+	local Data = Pages[Name]
+	if not Data then return end
+	for _, PageData in pairs(Pages) do PageData.Frame.Visible = false end
+	Data.Frame.Visible = true
+	CurrentPage = Data.Frame
+	CurrentLayout = Data.Layout
+	Content.CanvasSize = UDim2.fromOffset(0, Data.Layout.AbsoluteContentSize.Y + 12)
+end
+
+local function CreateTab(Name, Text)
+	local Button = Instance.new("TextButton")
+	Button.Name = Name .. "Tab"
+	Button.Size = UDim2.fromOffset(72, 30)
+	Button.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+	Button.BackgroundTransparency = 0.1
+	Button.BorderSizePixel = 0
+	Button.Text = Text
+	Button.TextColor3 = Color3.fromRGB(130, 130, 140)
+	Button.TextSize = 9
+	Button.Font = Enum.Font.GothamBold
+	Button.AutoButtonColor = false
+	Button.ZIndex = 7
+	Button.Parent = TabBar
+	Instance.new("UICorner", Button).CornerRadius = UDim.new(0, 9)
+	local Stroke = Instance.new("UIStroke", Button)
+	Stroke.Color = Color3.fromRGB(40, 40, 48)
+	Button.MouseButton1Click:Connect(function()
+		SelectPage(Name)
+		for PageName, _ in pairs(Pages) do
+			local Tab = TabBar:FindFirstChild(PageName .. "Tab")
+			if Tab then
+				Tab.BackgroundColor3 = PageName == Name and Color3.fromRGB(85, 35, 135) or Color3.fromRGB(24, 24, 28)
+				Tab.TextColor3 = PageName == Name and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(130, 130, 140)
+			end
+		end
+	end)
+	return Button
+end
+
+CreatePage("Movement")
+CreatePage("Utility")
+CreatePage("Jump")
+CreatePage("Credits")
+CreatePage("ESP")
+CreatePage("Pref")
+CreatePage("Config")
+
+CreateTab("Movement", "MOVEMENT")
+CreateTab("Utility", "UTILITY")
+CreateTab("Jump", "JUMP")
+CreateTab("Credits", "CREDITS")
+CreateTab("ESP", "ESP")
+CreateTab("Pref", "PREF")
+CreateTab("Config", "CONFIG")
+
+SelectPage("Movement")
+for _, TabName in ipairs({"Movement", "Utility", "Jump", "Credits", "ESP", "Pref", "Config"}) do
+	local Tab = TabBar:FindFirstChild(TabName .. "Tab")
+	if Tab then
+		Tab.BackgroundColor3 = TabName == "Movement" and Color3.fromRGB(85, 35, 135) or Color3.fromRGB(24, 24, 28)
+		Tab.TextColor3 = TabName == "Movement" and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(130, 130, 140)
+	end
+end
+
+local function Section(Text)
+	local Object = Instance.new("TextLabel")
+	Object.Size = UDim2.new(1, -8, 0, 16)
+	Object.BackgroundTransparency = 1
+	Object.Text = Text
+	Object.TextColor3 = Color3.fromRGB(190, 90, 255)
+	Object.TextSize = 10
+	Object.Font = UI_FONT
+	Object.TextXAlignment = Enum.TextXAlignment.Left
+	Object.ZIndex = 4
+	Object.Parent = CurrentPage
+	return Object
+end
+
+local function Label(Text)
+	local Object = Instance.new("TextLabel")
+	Object.Size = UDim2.new(1, -8, 0, 13)
+	Object.BackgroundTransparency = 1
+	Object.Text = Text
+	Object.TextColor3 = Color3.fromRGB(154, 158, 177)
+	Object.TextSize = 9
+	Object.Font = UI_FONT
+	Object.TextXAlignment = Enum.TextXAlignment.Left
+	Object.ZIndex = 4
+	Object.Parent = CurrentPage
+	return Object
+end
+
+local function Description(Text)
+	local Object = Instance.new("TextLabel")
+	Object.Size = UDim2.new(1, -10, 0, 15)
+	Object.BackgroundTransparency = 1
+	Object.Text = Text
+	Object.TextColor3 = Color3.fromRGB(115, 115, 125)
+	Object.TextSize = 8
+	Object.Font = Enum.Font.Gotham
+	Object.TextXAlignment = Enum.TextXAlignment.Left
+	Object.ZIndex = 4
+	Object.Parent = CurrentPage
+	return Object
+end
+
+local function TextBox(Default, Placeholder)
+	local Object = Instance.new("TextBox")
+	Object.Size = UDim2.new(1, -8, 0, 28)
+	Object.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+	Object.BorderSizePixel = 0
+	Object.Text = Default
+	Object.PlaceholderText = Placeholder
+	Object.PlaceholderColor3 = Color3.fromRGB(90, 90, 100)
+	Object.TextColor3 = Color3.fromRGB(245, 245, 250)
+	Object.TextSize = 10
+	Object.Font = UI_FONT
+	Object.ClearTextOnFocus = false
+	Object.ZIndex = 5
+	Object.Parent = CurrentPage
+	Instance.new("UICorner", Object).CornerRadius = UDim.new(0, 10)
+	local Stroke = Instance.new("UIStroke", Object)
+	Stroke.Color = Color3.fromRGB(40, 40, 48)
+	return Object
+end
+
+local function Button(Text)
+	local Object = Instance.new("TextButton")
+	Object.Size = UDim2.new(1, -8, 0, 29)
+	Object.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+	Object.BorderSizePixel = 0
+	Object.Text = Text
+	Object.TextColor3 = Color3.fromRGB(225, 228, 240)
+	Object.TextSize = 9
+	Object.Font = UI_FONT
+	Object.AutoButtonColor = false
+	Object.TextXAlignment = Enum.TextXAlignment.Left
+	Object.ZIndex = 5
+	Object.Parent = CurrentPage
+	Instance.new("UICorner", Object).CornerRadius = UDim.new(0, 10)
+	local Stroke = Instance.new("UIStroke", Object)
+	Stroke.Color = Color3.fromRGB(40, 40, 48)
+	Stroke.Transparency = 0.15
+	local DefaultColor = Object.BackgroundColor3
+	Object.MouseEnter:Connect(function()
+		Object.BackgroundColor3 = Color3.fromRGB(42, 25, 60)
+		Stroke.Color = Color3.fromRGB(190, 90, 255)
+	end)
+	Object.MouseLeave:Connect(function()
+		Object.BackgroundColor3 = DefaultColor
+		Stroke.Color = Color3.fromRGB(40, 40, 48)
+	end)
+	return Object
+end
+
+-- ==================== CREDITS ====================
+SelectPage("Credits")
+Section("SNOO HUB")
+Label("OWNER • CREATOR • SNOO")
+Label("COLLABORATOR • GUIZNX")
+Label("DISCORD • discord.gg/v2dwtQAqan")
+local DiscordButton = Button("  DISCORD • COPIAR")
+DiscordButton.MouseButton1Click:Connect(function()
+	if type(setclipboard) == "function" then
+		setclipboard("https://discord.gg/v2dwtQAqan")
+		DiscordButton.Text = "  DISCORD COPIADO"
+	else
+		DiscordButton.Text = "  discord.gg/v2dwtQAqan"
+	end
+	task.delay(1.5, function()
+		if DiscordButton.Parent then DiscordButton.Text = "  DISCORD • COPIAR" end
+	end)
+end)
+
+-- ==================== AUTO STEAL ====================
+SelectPage("Movement")
+local AutoStealEnabled = LoadedConfig.AutoStealEnabled == true
+local AutoStealConnection = nil
+local StealBarGui, StealBarFill, StealPercentLabel, StealStateLabel = nil, nil, nil, nil
+local StealStartTime = nil
+local StealDuration = ApplyLoadedNumber("StealDuration", 1.4, 0.1, 10)
+local StealRadius = ApplyLoadedNumber("StealRadius", 60, 1, 500)
+local IsStealing = false
+local StealData = {}
+
+local function CreateStealBar()
+	if StealBarGui then return end
+	StealBarGui = Instance.new("ScreenGui")
+	StealBarGui.Name = "SnooStealBar"
+	StealBarGui.ResetOnSpawn = false
+	StealBarGui.IgnoreGuiInset = true
+	StealBarGui.DisplayOrder = 20
+	StealBarGui.Parent = PlayerGui
+
+	local Frame = Instance.new("Frame", StealBarGui)
+	Frame.Name = "AutoSteal"
+	Frame.Size = UDim2.fromOffset(240, 48)
+	Frame.Position = UDim2.new(0.5, -120, 0.86, 0)
+	Frame.BackgroundColor3 = Color3.fromRGB(12, 12, 15)
+	Frame.BackgroundTransparency = 0.05
+	Frame.BorderSizePixel = 0
+	Frame.ClipsDescendants = true
+	Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 10)
+	local Stroke = Instance.new("UIStroke", Frame)
+	Stroke.Color = Color3.fromRGB(155, 70, 255)
+	Stroke.Thickness = 1.5
+
+	local Title = Instance.new("TextLabel", Frame)
+	Title.Size = UDim2.new(1, -24, 0, 18)
+	Title.Position = UDim2.fromOffset(12, 5)
+	Title.BackgroundTransparency = 1
+	Title.Text = "AUTO STEAL"
+	Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Title.TextSize = 10
+	Title.Font = Enum.Font.GothamBold
+	Title.TextXAlignment = Enum.TextXAlignment.Left
+
+	StealStateLabel = Instance.new("TextLabel", Frame)
+	StealStateLabel.Size = UDim2.new(0.55, 0, 0, 14)
+	StealStateLabel.Position = UDim2.fromOffset(12, 23)
+	StealStateLabel.BackgroundTransparency = 1
+	StealStateLabel.Text = "SEARCHING"
+	StealStateLabel.TextColor3 = Color3.fromRGB(150, 150, 160)
+	StealStateLabel.TextSize = 8
+	StealStateLabel.Font = Enum.Font.GothamBold
+	StealStateLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+	StealPercentLabel = Instance.new("TextLabel", Frame)
+	StealPercentLabel.Size = UDim2.new(0, 45, 0, 14)
+	StealPercentLabel.Position = UDim2.new(1, -57, 0, 23)
+	StealPercentLabel.BackgroundTransparency = 1
+	StealPercentLabel.Text = "0%"
+	StealPercentLabel.TextColor3 = Color3.fromRGB(190, 90, 255)
+	StealPercentLabel.TextSize = 9
+	StealPercentLabel.Font = Enum.Font.GothamBlack
+	StealPercentLabel.TextXAlignment = Enum.TextXAlignment.Right
+
+	local Track = Instance.new("Frame", Frame)
+	Track.Size = UDim2.new(1, -24, 0, 4)
+	Track.Position = UDim2.fromOffset(12, 40)
+	Track.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+	Track.BorderSizePixel = 0
+	Instance.new("UICorner", Track).CornerRadius = UDim.new(1, 0)
+
+	StealBarFill = Instance.new("Frame", Track)
+	StealBarFill.Size = UDim2.new(0, 0, 1, 0)
+	StealBarFill.BackgroundColor3 = Color3.fromRGB(155, 70, 255)
+	StealBarFill.BorderSizePixel = 0
+	Instance.new("UICorner", StealBarFill).CornerRadius = UDim.new(1, 0)
+end
+
+local function RemoveStealBar()
+	if StealBarGui then StealBarGui:Destroy() end
+	StealBarGui, StealBarFill, StealPercentLabel, StealStateLabel = nil, nil, nil, nil
+end
+
+local function FindNearestStealPrompt()
+	local CharacterObject = Player.Character
+	local RootObject = CharacterObject and CharacterObject:FindFirstChild("HumanoidRootPart")
+	local Plots = workspace:FindFirstChild("Plots")
+	if not RootObject or not Plots then return nil end
+	local NearestPrompt, NearestDistance = nil, StealRadius
+	for _, Plot in ipairs(Plots:GetChildren()) do
+		local Podiums = Plot:FindFirstChild("AnimalPodiums")
+		if Podiums then
+			for _, Podium in ipairs(Podiums:GetChildren()) do
+				local Base = Podium:FindFirstChild("Base")
+				local Spawn = Base and Base:FindFirstChild("Spawn")
+				local Attachment = Spawn and Spawn:FindFirstChild("PromptAttachment")
+				if Attachment then
+					local Distance = (Spawn.Position - RootObject.Position).Magnitude
+					if Distance <= NearestDistance then
+						for _, Prompt in ipairs(Attachment:GetChildren()) do
+							if Prompt:IsA("ProximityPrompt") and Prompt.Enabled and
+								(Prompt.ActionText == "Steal" or string.find(string.lower(Prompt.ActionText), "steal")) then
+								NearestPrompt, NearestDistance = Prompt, Distance
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	return NearestPrompt
+end
+
+local function ExecuteAutoSteal(Prompt)
+	if IsStealing or not Prompt or not Prompt.Parent then return end
+	if not StealData[Prompt] then
+		StealData[Prompt] = {Hold = {}, Trigger = {}, Ready = true}
+		pcall(function()
+			if getconnections then
+				for _, Connection in ipairs(getconnections(Prompt.PromptButtonHoldBegan)) do
+					if Connection.Function then table.insert(StealData[Prompt].Hold, Connection.Function) end
+				end
+				for _, Connection in ipairs(getconnections(Prompt.Triggered)) do
+					if Connection.Function then table.insert(StealData[Prompt].Trigger, Connection.Function) end
+				end
+			end
+		end)
+	end
+	local Data = StealData[Prompt]
+	if not Data.Ready then return end
+	Data.Ready = false
+	IsStealing = true
+	StealStartTime = tick()
+	task.spawn(function()
+		for _, Callback in ipairs(Data.Hold) do task.spawn(Callback) end
+		while IsStealing and tick() - StealStartTime < StealDuration do
+			local Progress = math.clamp((tick() - StealStartTime) / StealDuration, 0, 1)
+			if StealBarFill then StealBarFill.Size = UDim2.new(Progress, 0, 1, 0) end
+			if StealPercentLabel then StealPercentLabel.Text = math.floor(Progress * 100) .. "%" end
+			if StealStateLabel then StealStateLabel.Text = "STEALING" end
+			task.wait()
+		end
+		for _, Callback in ipairs(Data.Trigger) do task.spawn(Callback) end
+		task.wait(0.1)
+		Data.Ready = true
+		IsStealing = false
+		StealStartTime = nil
+		if StealBarFill then StealBarFill.Size = UDim2.new(0, 0, 1, 0) end
+		if StealPercentLabel then StealPercentLabel.Text = "0%" end
+		if StealStateLabel then StealStateLabel.Text = "SEARCHING" end
+	end)
+end
+
+local function StartAutoSteal()
+	if AutoStealConnection then return end
+	CreateStealBar()
+	local LastAutoStealScan = 0
+	AutoStealConnection = RunService.Heartbeat:Connect(function()
+		if not AutoStealEnabled or IsStealing then return end
+		local Now = os.clock()
+		if Now - LastAutoStealScan < 0.15 then return end
+		LastAutoStealScan = Now
+		local Prompt = FindNearestStealPrompt()
+		if Prompt then ExecuteAutoSteal(Prompt) end
+	end)
+end
+
+local function StopAutoSteal()
+	AutoStealEnabled = false
+	IsStealing = false
+	if AutoStealConnection then
+		AutoStealConnection:Disconnect()
+		AutoStealConnection = nil
+	end
+	RemoveStealBar()
+end
+
+-- ==================== MOVEMENT UI ====================
+SelectPage("Movement")
+Section("MOVEMENT")
+Label("WALK SPEED")
+local WalkBox = TextBox("110", "Digite a Walk Speed")
+local SpeedButton = Button("  WALK SPEED • OFF")
+
+Section("TRAJETO")
+Label("TRAJETO SPEED")
+local TravelBox = TextBox("110", "Digite a velocidade do trajeto")
+local SaveButton = Button("  SALVAR LOCALIZAÇÃO")
+local TravelButton = Button("  IR FLUTUANDO ATÉ LOCAL")
+
+Label("TP SPEED • STUDS/SEGUNDO")
+local TPBox = TextBox("20", "TP SPEED (studs/segundo)")
+local TPButton = Button("  TP POR PASSOS • IR")
+local SpamTPV1Button = Button("  SPAM TP V1 • OFF")
+local SpamTPV2Button = Button("  SPAM TP V2 • OFF")
+
+SelectPage("Utility")
+Section("OUTROS")
+local NoclipButton = Button("  NOCLIP • OFF")
+local AntiRagdollButton = Button("  ANTI-RAGDOLL • OFF")
+local FPSButton = Button("  FPS BOOST • OFF")
+
+Section("PROXIMITY PROMPT")
+local PromptButton = Button("  INSTANT PROMPT • OFF")
+local AutoStealButton = Button("  AUTO STEAL • OFF")
+
+SelectPage("Jump")
+Section("JUMP")
+Label("JUMP POWER")
+local JumpBox = TextBox("100", "Digite o Jump Power")
+local JumpButton = Button("  JUMP POWER • OFF")
+local InfiniteButton = Button("  INFINITY JUMP • OFF")
+
+-- ==================== LÓGICA DE MOVIMENTO (resumida para espaço) ====================
+SelectPage("Movement")
+
+SpeedButton.MouseButton1Click:Connect(function()
+	if not Humanoid then return end
+	if not WalkEnabled then
+		OriginalWalkSpeed = Humanoid.WalkSpeed
+		local Number = tonumber(WalkBox.Text)
+		if Number then WalkValue = math.clamp(Number, 1, 500) end
+		Humanoid.WalkSpeed = WalkValue
+		WalkEnabled = true
+		SpeedButton.Text = "  WALK SPEED • ON"
+	else
+		if OriginalWalkSpeed ~= nil then Humanoid.WalkSpeed = OriginalWalkSpeed end
+		WalkEnabled = false
+		SpeedButton.Text = "  WALK SPEED • OFF"
+	end
+end)
+
+SaveButton.MouseButton1Click:Connect(function()
+	if not Root then return end
+	SavedPosition = Root.CFrame
+	SaveButton.Text = "  LOCALIZAÇÃO SALVA"
+	task.delay(1.5, function()
+		if SaveButton.Parent then SaveButton.Text = "  SALVAR LOCALIZAÇÃO" end
+	end)
+end)
+
+local function StartTravel()
+	if Traveling then return end
+	local TargetCFrame = GetSafeSavedCFrame()
+	if not TargetCFrame or not Root or not Humanoid then
+		TravelButton.Text = "SALVE UMA LOCALIZAÇÃO"
+		task.delay(1.5, function()
+			if TravelButton.Parent then TravelButton.Text = "IR FLUTUANDO ATÉ LOCAL" end
+		end)
+		return
+	end
+	local Number = tonumber(TravelBox.Text)
+	if Number then TravelValue = math.clamp(Number, 1, 1000) end
+	Traveling = true
+	CancelTravel = false
+	TravelButton.Text = "CANCELAR TRAJETO"
+	local Destination = TargetCFrame.Position
+	local StartPosition = Root.Position
+	local FlightHeight = math.clamp(math.max(StartPosition.Y + 25, Destination.Y + 25), -50000, 50000)
+	local OldAutoRotate = Humanoid.AutoRotate
+	local OldPlatformStand = Humanoid.PlatformStand
+	Humanoid.AutoRotate = false
+	Humanoid.PlatformStand = true
+
+	local function MoveFloating(Target)
+		if not Traveling or CancelTravel or not Root or not Root.Parent then return true end
+		local Difference = Target - Root.Position
+		local Distance = Difference.Magnitude
+		if Distance <= 0.8 then
+			Root.CFrame = CFrame.new(Target)
+			Root.AssemblyLinearVelocity = Vector3.zero
+			Root.AssemblyAngularVelocity = Vector3.zero
+			return true
+		end
+		local dt = RunService.Heartbeat:Wait()
+		local Step = math.min(Distance, math.max(TravelValue, 1) * dt)
+		Root.CFrame = CFrame.new(Root.Position + Difference.Unit * Step)
+		Root.AssemblyLinearVelocity = Vector3.zero
+		Root.AssemblyAngularVelocity = Vector3.zero
+		return false
+	end
+
+	while Traveling and not CancelTravel do
+		if MoveFloating(Vector3.new(Root.Position.X, FlightHeight, Root.Position.Z)) then break end
+	end
+	while Traveling and not CancelTravel do
+		if MoveFloating(Vector3.new(Destination.X, FlightHeight, Destination.Z)) then break end
+	end
+	while Traveling and not CancelTravel do
+		if MoveFloating(Destination) then break end
+	end
+
+	if Traveling and not CancelTravel and Root and Root.Parent then
+		Root.CFrame = TargetCFrame
+		Root.AssemblyLinearVelocity = Vector3.zero
+		Root.AssemblyAngularVelocity = Vector3.zero
+		TravelButton.Text = "CHEGOU"
+	else
+		TravelButton.Text = "IR FLUTUANDO ATÉ LOCAL"
+	end
+	if Humanoid and Humanoid.Parent then
+		Humanoid.PlatformStand = OldPlatformStand
+		Humanoid.AutoRotate = OldAutoRotate
+	end
+	if Root and Root.Parent then
+		Root.AssemblyLinearVelocity = Vector3.zero
+		Root.AssemblyAngularVelocity = Vector3.zero
+	end
+	Traveling = false
+	CancelTravel = false
+	task.delay(1.5, function()
+		if TravelButton.Parent then TravelButton.Text = "IR FLUTUANDO ATÉ LOCAL" end
+	end)
+end
+
+TravelButton.MouseButton1Click:Connect(function()
+	if Traveling then CancelTravel = true else task.spawn(StartTravel) end
+end)
+
+local function StartStepTeleport()
+	if StepTeleporting then return end
+	local TargetCFrame = GetSafeSavedCFrame()
+	if not TargetCFrame or not Root then
+		TPButton.Text = "SALVE UMA LOCALIZAÇÃO"
+		task.delay(1.5, function()
+			if TPButton.Parent then TPButton.Text = "TP POR VELOCIDADE • IR" end
+		end)
+		return
+	end
+	local Number = tonumber(TPBox.Text)
+	if Number then TPValue = math.clamp(Number, 1, 1000) end
+	StepTeleporting = true
+	CancelStepTeleport = false
+	TPButton.Text = "CANCELAR TP"
+	local Destination = TargetCFrame.Position
+	local StartTime = os.clock()
+	local MaxDuration = math.clamp((Destination - Root.Position).Magnitude / math.max(TPValue, 1) + 10, 10, 180)
+	while StepTeleporting and not CancelStepTeleport do
+		if not Root or not Root.Parent then break end
+		if os.clock() - StartTime > MaxDuration then break end
+		local Difference = Destination - Root.Position
+		local Distance = Difference.Magnitude
+		if Distance <= 0.8 then break end
+		local dt = RunService.Heartbeat:Wait()
+		local Step = math.min(Distance, math.max(TPValue, 1) * dt)
+		Root.CFrame = CFrame.new(Root.Position + Difference.Unit * Step)
+		Root.AssemblyLinearVelocity = Vector3.zero
+		Root.AssemblyAngularVelocity = Vector3.zero
+	end
+	if StepTeleporting and not CancelStepTeleport and Root and Root.Parent then
+		Root.CFrame = TargetCFrame
+		Root.AssemblyLinearVelocity = Vector3.zero
+		Root.AssemblyAngularVelocity = Vector3.zero
+		TPButton.Text = "CHEGOU"
+	else
+		TPButton.Text = "TP POR VELOCIDADE • IR"
+	end
+	StepTeleporting = false
+	CancelStepTeleport = false
+	task.delay(1.5, function()
+		if TPButton.Parent then TPButton.Text = "TP POR VELOCIDADE • IR" end
+	end)
+end
+
+TPButton.MouseButton1Click:Connect(function()
+	if StepTeleporting then CancelStepTeleport = true else task.spawn(StartStepTeleport) end
+end)
+
+-- Spam TP (mantido igual ao V1.0)
+local SpamTPV1Enabled, SpamTPV2Enabled = false, false
+local SpamTPV1Connection, SpamTPV2Connection = nil, nil
+local SpamTPV2Busy = false
+
+local function GetSpamTarget()
+	return FloatingSavedPosition or GetSafeSavedCFrame()
+end
+
+local function StopSpamTPV1()
+	SpamTPV1Enabled = false
+	if SpamTPV1Connection then SpamTPV1Connection:Disconnect() SpamTPV1Connection = nil end
+end
+
+local function StartSpamTPV1()
+	if SpamTPV1Connection then return end
+	local LastSpam = 0
+	SpamTPV1Connection = RunService.Heartbeat:Connect(function()
+		if not SpamTPV1Enabled or not Root or not Root.Parent then return end
+		local Now = os.clock()
+		if Now - LastSpam < 0.08 then return end
+		LastSpam = Now
+		local Target = GetSpamTarget()
+		if not IsValidCFrame(Target) then return end
+		Root.CFrame = Target
+		Root.AssemblyLinearVelocity = Vector3.zero
+		Root.AssemblyAngularVelocity = Vector3.zero
+	end)
+end
+
+local function SetSpamTPV1(Value)
+	SpamTPV1Enabled = Value == true
+	if SpamTPV1Enabled then
+		if SpamTPV2Enabled then
+			SpamTPV2Enabled = false
+			if SpamTPV2Connection then SpamTPV2Connection:Disconnect() SpamTPV2Connection = nil end
+			SpamTPV2Busy = false
+		end
+		StartSpamTPV1()
+	else
+		StopSpamTPV1()
+	end
+	if SpamTPV1Button then SpamTPV1Button.Text = "  SPAM TP V1 • " .. (SpamTPV1Enabled and "ON" or "OFF") end
+	if SpamTPV2Button then SpamTPV2Button.Text = "  SPAM TP V2 • " .. (SpamTPV2Enabled and "ON" or "OFF") end
+	if SaveConfig then SaveConfig() end
+end
+
+local function StopSpamTPV2()
+	SpamTPV2Enabled = false
+	if SpamTPV2Connection then SpamTPV2Connection:Disconnect() SpamTPV2Connection = nil end
+	SpamTPV2Busy = false
+end
+
+local function StartSpamTPV2()
+	if SpamTPV2Connection then return end
+	SpamTPV2Connection = RunService.Heartbeat:Connect(function()
+		if not SpamTPV2Enabled or SpamTPV2Busy or not Root or not Root.Parent then return end
+		local Target = GetSpamTarget()
+		if not IsValidCFrame(Target) then return end
+		SpamTPV2Busy = true
+		task.spawn(function()
+			pcall(function()
+				local Behind = Target.Position - Target.LookVector * 5
+				Root.AssemblyLinearVelocity = Vector3.zero
+				Root.AssemblyAngularVelocity = Vector3.zero
+				Root.CFrame = CFrame.lookAt(Behind, Target.Position)
+				RunService.Heartbeat:Wait()
+				if SpamTPV2Enabled and Root and Root.Parent then
+					local StartCF = Root.CFrame
+					local Duration = 0.08
+					local Started = os.clock()
+					while SpamTPV2Enabled and Root and Root.Parent do
+						local Alpha = math.clamp((os.clock() - Started) / Duration, 0, 1)
+						local Pos = StartCF.Position:Lerp(Target.Position, Alpha)
+						Root.CFrame = CFrame.lookAt(Pos, Target.Position)
+						Root.AssemblyLinearVelocity = Vector3.zero
+						Root.AssemblyAngularVelocity = Vector3.zero
+						if Alpha >= 1 then break end
+						RunService.Heartbeat:Wait()
+					end
+					if SpamTPV2Enabled and Root and Root.Parent then
+						Root.CFrame = Target
+						Root.AssemblyLinearVelocity = Vector3.zero
+						Root.AssemblyAngularVelocity = Vector3.zero
+					end
+				end
+			end)
+			SpamTPV2Busy = false
+		end)
+	end)
+end
+
+local function SetSpamTPV2(Value)
+	SpamTPV2Enabled = Value == true
+	if SpamTPV2Enabled then
+		if SpamTPV1Enabled then StopSpamTPV1() end
+		StartSpamTPV2()
+	else
+		StopSpamTPV2()
+	end
+	if SpamTPV1Button then SpamTPV1Button.Text = "  SPAM TP V1 • " .. (SpamTPV1Enabled and "ON" or "OFF") end
+	if SpamTPV2Button then SpamTPV2Button.Text = "  SPAM TP V2 • " .. (SpamTPV2Enabled and "ON" or "OFF") end
+	if SaveConfig then SaveConfig() end
+end
+
+SpamTPV1Button.MouseButton1Click:Connect(function()
+	local Target = GetSpamTarget()
+	if not IsValidCFrame(Target) then
+		SpamTPV1Button.Text = "  SPAM TP V1 • SEM LOCAL"
+		task.delay(1.2, function()
+			if SpamTPV1Button.Parent then SpamTPV1Button.Text = "  SPAM TP V1 • " .. (SpamTPV1Enabled and "ON" or "OFF") end
+		end)
+		return
+	end
+	SetSpamTPV1(not SpamTPV1Enabled)
+end)
+
+SpamTPV2Button.MouseButton1Click:Connect(function()
+	local Target = GetSpamTarget()
+	if not IsValidCFrame(Target) then
+		SpamTPV2Button.Text = "  SPAM TP V2 • SEM LOCAL"
+		task.delay(1.2, function()
+			if SpamTPV2Button.Parent then SpamTPV2Button.Text = "  SPAM TP V2 • " .. (SpamTPV2Enabled and "ON" or "OFF") end
+		end)
+		return
+	end
+	SetSpamTPV2(not SpamTPV2Enabled)
+end)
+
+-- FPS / Noclip / Prompt / Jump (mantidos)
+local FPSOriginals = {}
+local FPSOriginalLighting, FPSOriginalQuality = nil, nil
+
+local function ApplyFPSBoost()
+	if FPSBoostEnabled then return end
+	FPSBoostEnabled = true
+	local Lighting = game:GetService("Lighting")
+	pcall(function()
+		FPSOriginalLighting = {
+			GlobalShadows = Lighting.GlobalShadows,
+			EnvironmentDiffuseScale = Lighting.EnvironmentDiffuseScale,
+			EnvironmentSpecularScale = Lighting.EnvironmentSpecularScale,
+			FogEnd = Lighting.FogEnd,
+		}
+		Lighting.GlobalShadows = false
+		Lighting.EnvironmentDiffuseScale = 0
+		Lighting.EnvironmentSpecularScale = 0
+		if PerformanceMode == "Extreme" then Lighting.FogEnd = math.min(Lighting.FogEnd, 2500)
+		elseif PerformanceMode == "Ultra" then Lighting.FogEnd = math.min(Lighting.FogEnd, 5000) end
+	end)
+	pcall(function()
+		local GameSettings = UserSettings():GetService("UserGameSettings")
+		FPSOriginalQuality = GameSettings.SavedQualityLevel
+		if PerformanceMode ~= "Balanced" then GameSettings.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1 end
+	end)
+	for _, Object in ipairs(workspace:GetDescendants()) do
+		if Object:IsA("BasePart") and PerformanceConfig.DisableShadows then
+			FPSOriginals[Object] = FPSOriginals[Object] or {CastShadow = Object.CastShadow}
+			Object.CastShadow = false
+		elseif (Object:IsA("ParticleEmitter") and PerformanceConfig.DisableParticles)
+			or ((Object:IsA("Trail") or Object:IsA("Beam")) and Object ~= BestBeam and PerformanceConfig.DisableTrailsBeams)
+			or (Object:IsA("PostEffect") and PerformanceConfig.DisablePostEffects) then
+			FPSOriginals[Object] = FPSOriginals[Object] or {Enabled = Object.Enabled}
+			Object.Enabled = false
+		end
+	end
+	FPSButton.Text = "  FPS BOOST • " .. PerformanceMode:upper()
+end
+
+local function RemoveFPSBoost()
+	if not FPSBoostEnabled then return end
+	FPSBoostEnabled = false
+	for Object, Original in pairs(FPSOriginals) do
+		if Object and Object.Parent then
+			pcall(function()
+				if Original.CastShadow ~= nil then Object.CastShadow = Original.CastShadow end
+				if Original.Enabled ~= nil then Object.Enabled = Original.Enabled end
+			end)
+		end
+	end
+	table.clear(FPSOriginals)
+	pcall(function()
+		local Lighting = game:GetService("Lighting")
+		if FPSOriginalLighting then
+			Lighting.GlobalShadows = FPSOriginalLighting.GlobalShadows
+			Lighting.EnvironmentDiffuseScale = FPSOriginalLighting.EnvironmentDiffuseScale
+			Lighting.EnvironmentSpecularScale = FPSOriginalLighting.EnvironmentSpecularScale
+			Lighting.FogEnd = FPSOriginalLighting.FogEnd
+		end
+	end)
+	pcall(function()
+		local GameSettings = UserSettings():GetService("UserGameSettings")
+		if FPSOriginalQuality then GameSettings.SavedQualityLevel = FPSOriginalQuality end
+	end)
+	FPSButton.Text = "  FPS BOOST • OFF"
+end
+
+FPSButton.MouseButton1Click:Connect(function()
+	if FPSBoostEnabled then RemoveFPSBoost() else ApplyFPSBoost() end
+	if SaveConfig then SaveConfig() end
+end)
+
+NoclipButton.MouseButton1Click:Connect(function()
+	NoclipEnabled = not NoclipEnabled
+	NoclipButton.Text = "  NOCLIP • " .. (NoclipEnabled and "ON" or "OFF")
+end)
+
+AntiRagdollButton.MouseButton1Click:Connect(function()
+	AntiRagdollEnabled = not AntiRagdollEnabled
+	AntiRagdollButton.Text = "  ANTI-RAGDOLL • " .. (AntiRagdollEnabled and "ON" or "OFF")
+end)
+
+local function ConfigurePrompt(Prompt)
+	if not Prompt:IsA("ProximityPrompt") then return end
+	if InstantPromptEnabled then
+		if Prompt:GetAttribute("SnooOriginalHold") == nil then
+			Prompt:SetAttribute("SnooOriginalHold", Prompt.HoldDuration)
+		end
+		Prompt.HoldDuration = 0
+		Prompt.RequiresLineOfSight = false
+	else
+		local Original = Prompt:GetAttribute("SnooOriginalHold")
+		if typeof(Original) == "number" then Prompt.HoldDuration = Original end
+	end
+end
+
+local function UpdatePrompts()
+	for _, Object in ipairs(workspace:GetDescendants()) do
+		if Object:IsA("ProximityPrompt") then ConfigurePrompt(Object) end
+	end
+end
+
+AutoStealButton.MouseButton1Click:Connect(function()
+	AutoStealEnabled = not AutoStealEnabled
+	AutoStealButton.Text = "  AUTO STEAL • " .. (AutoStealEnabled and "ON" or "OFF")
+	if AutoStealEnabled then StartAutoSteal() else StopAutoSteal() end
+	if SaveConfig then SaveConfig() end
+end)
+
+PromptButton.MouseButton1Click:Connect(function()
+	InstantPromptEnabled = not InstantPromptEnabled
+	UpdatePrompts()
+	PromptButton.Text = "  INSTANT PROMPT • " .. (InstantPromptEnabled and "ON" or "OFF")
+end)
+
+JumpButton.MouseButton1Click:Connect(function()
+	if not Humanoid then return end
+	if not JumpEnabled then
+		OriginalJumpPower = Humanoid.JumpPower
+		local Number = tonumber(JumpBox.Text)
+		if Number then JumpValue = math.clamp(Number, 1, 500) end
+		Humanoid.UseJumpPower = true
+		Humanoid.JumpPower = JumpValue
+		JumpEnabled = true
+		JumpButton.Text = "  JUMP POWER • ON"
+	else
+		if OriginalJumpPower ~= nil then
+			Humanoid.UseJumpPower = true
+			Humanoid.JumpPower = OriginalJumpPower
+		end
+		JumpEnabled = false
+		JumpButton.Text = "  JUMP POWER • OFF"
+	end
+end)
+
+local InfiniteJumpRequestConnection
+local function StartInfiniteJump()
+	if InfiniteJumpRequestConnection then InfiniteJumpRequestConnection:Disconnect() end
+	InfiniteJumpRequestConnection = UserInputService.JumpRequest:Connect(function()
+		if not InfiniteJumpEnabled then return end
+		local Char = Player.Character
+		if not Char then return end
+		local Hum = Char:FindFirstChildOfClass("Humanoid")
+		if Hum and Hum.Health > 0 then Hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+	end)
+end
+
+local function StopInfiniteJump()
+	if InfiniteJumpRequestConnection then
+		InfiniteJumpRequestConnection:Disconnect()
+		InfiniteJumpRequestConnection = nil
+	end
+end
+
+InfiniteButton.MouseButton1Click:Connect(function()
+	InfiniteJumpEnabled = not InfiniteJumpEnabled
+	if InfiniteJumpEnabled then StartInfiniteJump() else StopInfiniteJump() end
+	InfiniteButton.Text = "  INFINITY JUMP • " .. (InfiniteJumpEnabled and "ON" or "OFF")
+end)
+
+local ResetCooldown = 0
+local function ForceAntiRagdollReset()
+	if not Character or not Humanoid or not Root or Humanoid.Health <= 0 then return end
+	pcall(function()
+		Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+		Root.AssemblyLinearVelocity = Vector3.zero
+		Root.AssemblyAngularVelocity = Vector3.zero
+		for _, Object in ipairs(Character:GetDescendants()) do
+			if Object:IsA("Motor6D") or Object:IsA("Constraint") then Object.Enabled = true end
+		end
+		if workspace.CurrentCamera then workspace.CurrentCamera.CameraSubject = Humanoid end
+		Humanoid.AutoRotate = true
+		Humanoid.PlatformStand = false
+		Humanoid.Sit = false
+	end)
+end
+
+local LastMovementUpdate = 0
+RunService.Heartbeat:Connect(function()
+	local Now = os.clock()
+	if Now - LastMovementUpdate < 0.05 then return end
+	LastMovementUpdate = Now
+	if not Character or not Humanoid or not Root or not Root.Parent then return end
+	if WalkEnabled and not Traveling and not StepTeleporting and Humanoid.WalkSpeed ~= WalkValue then
+		Humanoid.WalkSpeed = WalkValue
+	end
+	if JumpEnabled then
+		Humanoid.UseJumpPower = true
+		if Humanoid.JumpPower ~= JumpValue then Humanoid.JumpPower = JumpValue end
+	end
+	if NoclipEnabled then
+		for _, Object in ipairs(Character:GetDescendants()) do
+			if Object:IsA("BasePart") then
+				if NoclipOriginals[Object] == nil then NoclipOriginals[Object] = Object.CanCollide end
+				if Object.CanCollide then Object.CanCollide = false end
+			end
+		end
+	elseif next(NoclipOriginals) then
+		for Object, Original in pairs(NoclipOriginals) do
+			if Object and Object.Parent then Object.CanCollide = Original end
+		end
+		table.clear(NoclipOriginals)
+	end
+	if AntiRagdollEnabled then
+		local State = Humanoid:GetState()
+		if State == Enum.HumanoidStateType.Ragdoll or State == Enum.HumanoidStateType.FallingDown or State == Enum.HumanoidStateType.Physics then
+			if Now - ResetCooldown > 0.20 then
+				ResetCooldown = Now
+				ForceAntiRagdollReset()
+			end
+		end
+	end
+end)
+
+-- Minimize + Drag
+local Minimized = false
+Minimize.MouseButton1Click:Connect(function()
+	Minimized = not Minimized
+	if Minimized then
+		Content.Visible = false
+		TabBar.Visible = false
+		Minimize.Text = "+"
+		Main:TweenSize(UDim2.fromOffset(200, 52), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.2, true)
+	else
+		Content.Visible = true
+		TabBar.Visible = true
+		Minimize.Text = "—"
+		Main:TweenSize(UDim2.fromOffset(540, 420), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.2, true)
+	end
+end)
+
+local Dragging, DragStart, StartPos = false, nil, nil
+Header.InputBegan:Connect(function(Input)
+	if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+		Dragging = true
+		DragStart = Input.Position
+		StartPos = Main.Position
+	end
+end)
+UserInputService.InputChanged:Connect(function(Input)
+	if not Dragging then return end
+	if Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch then
+		local Delta = Input.Position - DragStart
+		Main.Position = UDim2.new(StartPos.X.Scale, StartPos.X.Offset + Delta.X, StartPos.Y.Scale, StartPos.Y.Offset + Delta.Y)
+	end
+end)
+UserInputService.InputEnded:Connect(function(Input)
+	if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+		Dragging = false
+	end
+end)
+
+for _, PageData in pairs(Pages) do
+	PageData.Layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		if PageData.Frame.Visible then
+			Content.CanvasSize = UDim2.fromOffset(0, PageData.Layout.AbsoluteContentSize.Y + 12)
+		end
+	end)
+end
+
+-- ==================== FLOATING PANEL + TP BEST ====================
+local ESPFindBestTargetReference = nil
+local CurrentBestTarget = nil
+local BestLineEnabled = false
+
+local function TPBest()
+	if not Root or not Root.Parent then return nil end
+	local Finder = ESPFindBestTargetReference
+	if type(Finder) ~= "function" then return nil end
+	local Target = Finder()
+	if not Target or not Target.Part or not Target.Part.Parent then return nil end
+	local TargetCFrame = CFrame.new(Target.Part.Position + Vector3.new(0, 4, 0))
+	if not IsValidCFrame(TargetCFrame) then return nil end
+	Root.CFrame = TargetCFrame
+	Root.AssemblyLinearVelocity = Vector3.zero
+	Root.AssemblyAngularVelocity = Vector3.zero
+	CurrentBestTarget = Target
+	return Target
+end
+
+local FloatingTPGui = Instance.new("ScreenGui")
+FloatingTPGui.Name = "SnooFloatingTP"
+FloatingTPGui.ResetOnSpawn = false
+FloatingTPGui.IgnoreGuiInset = true
+FloatingTPGui.DisplayOrder = 30
+FloatingTPGui.Parent = PlayerGui
+
+local FloatingTP = Instance.new("Frame", FloatingTPGui)
+FloatingTP.Name = "FloatingTP"
+FloatingTP.Size = UDim2.fromOffset(172, 214)
+FloatingTP.Position = UDim2.fromOffset(
+	type(LoadedConfig.FloatingXOffset) == "number" and LoadedConfig.FloatingXOffset or 20,
+	type(LoadedConfig.FloatingYOffset) == "number" and LoadedConfig.FloatingYOffset or 300
+)
+FloatingTP.BackgroundColor3 = Color3.fromRGB(12, 12, 15)
+FloatingTP.BackgroundTransparency = 0.04
+FloatingTP.BorderSizePixel = 0
+FloatingTP.Active = true
+Instance.new("UICorner", FloatingTP).CornerRadius = UDim.new(0, 10)
+local FloatingStroke = Instance.new("UIStroke", FloatingTP)
+FloatingStroke.Color = Color3.fromRGB(155, 70, 255)
+FloatingStroke.Thickness = 1.5
+FloatingStroke.Transparency = 0.12
+
+local FloatingTitle = Instance.new("TextLabel", FloatingTP)
+FloatingTitle.Size = UDim2.new(1, -12, 0, 16)
+FloatingTitle.Position = UDim2.fromOffset(6, 4)
+FloatingTitle.BackgroundTransparency = 1
+FloatingTitle.Text = "TP CONTROL"
+FloatingTitle.TextColor3 = Color3.fromRGB(190, 90, 255)
+FloatingTitle.TextSize = 8
+FloatingTitle.Font = Enum.Font.GothamBold
+FloatingTitle.TextXAlignment = Enum.TextXAlignment.Center
+
+local SaveTPButton = Instance.new("TextButton", FloatingTP)
+SaveTPButton.Size = UDim2.new(0.5, -9, 0, 28)
+SaveTPButton.Position = UDim2.fromOffset(6, 24)
+SaveTPButton.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+SaveTPButton.BorderSizePixel = 0
+SaveTPButton.Text = "SALVAR TP"
+SaveTPButton.TextColor3 = Color3.fromRGB(245, 245, 245)
+SaveTPButton.TextSize = 8
+SaveTPButton.Font = Enum.Font.GothamBold
+SaveTPButton.AutoButtonColor = false
+
+local TPButtonSmall = Instance.new("TextButton", FloatingTP)
+TPButtonSmall.Size = UDim2.new(0.5, -9, 0, 28)
+TPButtonSmall.Position = UDim2.new(0.5, 3, 0, 24)
+TPButtonSmall.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+TPButtonSmall.BorderSizePixel = 0
+TPButtonSmall.Text = "TP"
+TPButtonSmall.TextColor3 = Color3.fromRGB(245, 245, 245)
+TPButtonSmall.TextSize = 9
+TPButtonSmall.Font = Enum.Font.GothamBold
+TPButtonSmall.AutoButtonColor = false
+
+local TPBestButton = Instance.new("TextButton", FloatingTP)
+TPBestButton.Size = UDim2.new(1, -12, 0, 28)
+TPBestButton.Position = UDim2.fromOffset(6, 58)
+TPBestButton.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+TPBestButton.BorderSizePixel = 0
+TPBestButton.Text = "TP BEST"
+TPBestButton.TextColor3 = Color3.fromRGB(245, 245, 245)
+TPBestButton.TextSize = 8
+TPBestButton.Font = Enum.Font.GothamBold
+TPBestButton.AutoButtonColor = false
+
+local TravelButtonSmall = Instance.new("TextButton", FloatingTP)
+TravelButtonSmall.Size = UDim2.new(1, -12, 0, 28)
+TravelButtonSmall.Position = UDim2.fromOffset(6, 92)
+TravelButtonSmall.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+TravelButtonSmall.BorderSizePixel = 0
+TravelButtonSmall.Text = "IR PELO TRAJETO"
+TravelButtonSmall.TextColor3 = Color3.fromRGB(245, 245, 245)
+TravelButtonSmall.TextSize = 8
+TravelButtonSmall.Font = Enum.Font.GothamBold
+TravelButtonSmall.AutoButtonColor = false
+
+local SpamTPV1ButtonSmall = Instance.new("TextButton", FloatingTP)
+SpamTPV1ButtonSmall.Size = UDim2.new(1, -12, 0, 28)
+SpamTPV1ButtonSmall.Position = UDim2.fromOffset(6, 126)
+SpamTPV1ButtonSmall.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+SpamTPV1ButtonSmall.BorderSizePixel = 0
+SpamTPV1ButtonSmall.Text = "SPAM TP V1 • OFF"
+SpamTPV1ButtonSmall.TextColor3 = Color3.fromRGB(245, 245, 245)
+SpamTPV1ButtonSmall.TextSize = 8
+SpamTPV1ButtonSmall.Font = Enum.Font.GothamBold
+SpamTPV1ButtonSmall.AutoButtonColor = false
+
+local SpamTPV2ButtonSmall = Instance.new("TextButton", FloatingTP)
+SpamTPV2ButtonSmall.Size = UDim2.new(1, -12, 0, 28)
+SpamTPV2ButtonSmall.Position = UDim2.fromOffset(6, 160)
+SpamTPV2ButtonSmall.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+SpamTPV2ButtonSmall.BorderSizePixel = 0
+SpamTPV2ButtonSmall.Text = "SPAM TP V2 • OFF"
+SpamTPV2ButtonSmall.TextColor3 = Color3.fromRGB(245, 245, 245)
+SpamTPV2ButtonSmall.TextSize = 8
+SpamTPV2ButtonSmall.Font = Enum.Font.GothamBold
+SpamTPV2ButtonSmall.AutoButtonColor = false
+
+for _, Btn in ipairs({SaveTPButton, TPButtonSmall, TPBestButton, TravelButtonSmall, SpamTPV1ButtonSmall, SpamTPV2ButtonSmall}) do
+	Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 8)
+	local Stroke = Instance.new("UIStroke", Btn)
+	Stroke.Color = Color3.fromRGB(40, 40, 48)
+	Stroke.Transparency = 0.1
+	Btn.MouseEnter:Connect(function()
+		Btn.BackgroundColor3 = Color3.fromRGB(42, 25, 60)
+		Stroke.Color = Color3.fromRGB(190, 90, 255)
+	end)
+	Btn.MouseLeave:Connect(function()
+		Btn.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+		Stroke.Color = Color3.fromRGB(40, 40, 48)
+	end)
+end
+
+if type(LoadedConfig.SavedTP) == "table" and #LoadedConfig.SavedTP == 12 then
+	FloatingSavedPosition = CFrame.new(table.unpack(LoadedConfig.SavedTP))
+	SavedPosition = FloatingSavedPosition
+end
+
+SpamTPV1Enabled = LoadedConfig.SpamTPV1Enabled == true
+SpamTPV2Enabled = LoadedConfig.SpamTPV2Enabled == true
+UltraESPEnabled = LoadedConfig.UltraESPEnabled == true
+if SpamTPV1Enabled and SpamTPV2Enabled then SpamTPV2Enabled = false end
+
+SaveConfig = function()
+	if type(writefile) ~= "function" then return end
+	local Data = {
+		WalkValue = WalkValue, JumpValue = JumpValue, TravelValue = TravelValue, TPValue = TPValue,
+		StealDuration = StealDuration, StealRadius = StealRadius,
+		WalkEnabled = WalkEnabled, JumpEnabled = JumpEnabled, NoclipEnabled = NoclipEnabled,
+		AntiRagdollEnabled = AntiRagdollEnabled, InfiniteJumpEnabled = InfiniteJumpEnabled,
+		InstantPromptEnabled = InstantPromptEnabled, FPSBoostEnabled = FPSBoostEnabled,
+		PerformanceMode = PerformanceMode, AutoStealEnabled = AutoStealEnabled,
+		SpamTPV1Enabled = SpamTPV1Enabled, SpamTPV2Enabled = SpamTPV2Enabled,
+		UltraESPEnabled = UltraESPEnabled, Language = Language,
+		PriorityList = PriorityList,
+		SavedTP = FloatingSavedPosition and {FloatingSavedPosition:GetComponents()} or nil,
+		FloatingXOffset = FloatingTP.Position.X.Offset,
+		FloatingYOffset = FloatingTP.Position.Y.Offset,
+	}
+	pcall(function() writefile(ConfigFileName, HttpService:JSONEncode(Data)) end)
+end
+
+SaveTPButton.MouseButton1Click:Connect(function()
+	if not Root then
+		SaveTPButton.Text = "SEM ROOT"
+		task.delay(1.2, function() if SaveTPButton.Parent then SaveTPButton.Text = "SALVAR TP" end end)
+		return
+	end
+	if not IsValidCFrame(Root.CFrame) then
+		SaveTPButton.Text = "LOCAL INVÁLIDO"
+		return
+	end
+	FloatingSavedPosition = Root.CFrame
+	SavedPosition = Root.CFrame
+	SaveTPButton.Text = "SALVO!"
+	if SaveConfig then SaveConfig() end
+	task.delay(1.2, function() if SaveTPButton.Parent then SaveTPButton.Text = "SALVAR TP" end end)
+end)
+
+SpamTPV1ButtonSmall.MouseButton1Click:Connect(function()
+	local Target = GetSpamTarget()
+	if not IsValidCFrame(Target) then
+		SpamTPV1ButtonSmall.Text = "SEM LOCAL"
+		task.delay(1.2, function()
+			if SpamTPV1ButtonSmall.Parent then SpamTPV1ButtonSmall.Text = "SPAM TP V1 • " .. (SpamTPV1Enabled and "ON" or "OFF") end
+		end)
+		return
+	end
+	SetSpamTPV1(not SpamTPV1Enabled)
+end)
+
+SpamTPV2ButtonSmall.MouseButton1Click:Connect(function()
+	local Target = GetSpamTarget()
+	if not IsValidCFrame(Target) then
+		SpamTPV2ButtonSmall.Text = "SEM LOCAL"
+		task.delay(1.2, function()
+			if SpamTPV2ButtonSmall.Parent then SpamTPV2ButtonSmall.Text = "SPAM TP V2 • " .. (SpamTPV2Enabled and "ON" or "OFF") end
+		end)
+		return
+	end
+	SetSpamTPV2(not SpamTPV2Enabled)
+end)
+
+TPButtonSmall.MouseButton1Click:Connect(function()
+	local Target = FloatingSavedPosition or GetSafeSavedCFrame()
+	if not IsValidCFrame(Target) or not Root then
+		TPButtonSmall.Text = "SEM TP"
+		task.delay(1.2, function() if TPButtonSmall.Parent then TPButtonSmall.Text = "TP" end end)
+		return
+	end
+	Root.CFrame = Target
+	Root.AssemblyLinearVelocity = Vector3.zero
+	Root.AssemblyAngularVelocity = Vector3.zero
+	if SaveConfig then SaveConfig() end
+	TPButtonSmall.Text = "OK"
+	task.delay(1.2, function() if TPButtonSmall.Parent then TPButtonSmall.Text = "TP" end end)
+end)
+
+TPBestButton.MouseButton1Click:Connect(function()
+	local Target = ESPFindBestTargetReference and ESPFindBestTargetReference()
+	if Target then
+		CurrentBestTarget = Target
+		BestLineEnabled = true
+		TPBest()
+		local Name = Target.Name or "MELHOR"
+		TPBestButton.Text = "BEST: " .. string.sub(Name, 1, 18)
+	else
+		TPBestButton.Text = "NÃO ENCONTRADO"
+	end
+	task.delay(1.5, function()
+		if TPBestButton.Parent then TPBestButton.Text = "TP BEST" end
+	end)
+end)
+
+TravelButtonSmall.MouseButton1Click:Connect(function()
+	if Traveling then
+		CancelTravel = true
+		TravelButtonSmall.Text = "CANCELANDO..."
+		return
+	end
+	if not (FloatingSavedPosition or SavedPosition) then
+		TravelButtonSmall.Text = "SEM LOCAL"
+		task.delay(1.2, function()
+			if TravelButtonSmall.Parent then TravelButtonSmall.Text = "IR PELO TRAJETO" end
+		end)
+		return
+	end
+	if FloatingSavedPosition then SavedPosition = FloatingSavedPosition end
+	TravelButtonSmall.Text = "TRAJETO..."
+	task.spawn(function()
+		StartTravel()
+		if TravelButtonSmall.Parent and not Traveling then
+			TravelButtonSmall.Text = "IR PELO TRAJETO"
+		end
+	end)
+end)
+
+-- Drag flutuante
+local FloatingDragging, FloatingDragStart, FloatingStartPos = false, nil, nil
+local function IsInsideButton(Pos)
+	for _, Obj in ipairs(FloatingTP:GetDescendants()) do
+		if Obj:IsA("GuiButton") and Obj.Visible then
+			local P, S = Obj.AbsolutePosition, Obj.AbsoluteSize
+			if Pos.X >= P.X and Pos.X <= P.X + S.X and Pos.Y >= P.Y and Pos.Y <= P.Y + S.Y then return true end
+		end
+	end
+	return false
+end
+
+FloatingTP.InputBegan:Connect(function(Input)
+	if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+		if IsInsideButton(Input.Position) then return end
+		FloatingDragging = true
+		FloatingDragStart = Input.Position
+		FloatingStartPos = FloatingTP.Position
+	end
+end)
+UserInputService.InputChanged:Connect(function(Input)
+	if not FloatingDragging then return end
+	if Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch then
+		local Delta = Input.Position - FloatingDragStart
+		local Cam = workspace.CurrentCamera
+		local Viewport = Cam and Cam.ViewportSize or Vector2.new(1920, 1080)
+		local NewX = math.clamp(FloatingStartPos.X.Offset + Delta.X, 4, math.max(4, Viewport.X - FloatingTP.AbsoluteSize.X - 4))
+		local NewY = math.clamp(FloatingStartPos.Y.Offset + Delta.Y, 4, math.max(4, Viewport.Y - FloatingTP.AbsoluteSize.Y - 4))
+		FloatingTP.Position = UDim2.fromOffset(NewX, NewY)
+	end
+end)
+UserInputService.InputEnded:Connect(function(Input)
+	if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+		FloatingDragging = false
+		if SaveConfig then SaveConfig() end
+	end
+end)
+
+-- =========================================================
+-- ABA PREFERÊNCIA (EDITÁVEL)
+-- =========================================================
+SelectPage("Pref")
+Section("PREFERÊNCIA DE BRAINROTS")
+Description("Arraste a ordem com os botões. Digite o nome exato para adicionar.")
+Description("A lista é salva automaticamente no arquivo JSON.")
+
+local PrefStatus = Label("Lista carregada (" .. #PriorityList .. " itens)")
+
+local AddBox = TextBox("", "Digite o nome exato do Brainrot")
+local AddButton = Button("  ADICIONAR NA LISTA")
+
+local PrefListFrame = Instance.new("Frame")
+PrefListFrame.Size = UDim2.new(1, -8, 0, 220)
+PrefListFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+PrefListFrame.BorderSizePixel = 0
+PrefListFrame.ClipsDescendants = true
+PrefListFrame.Parent = CurrentPage
+Instance.new("UICorner", PrefListFrame).CornerRadius = UDim.new(0, 8)
+
+local PrefScroll = Instance.new("ScrollingFrame", PrefListFrame)
+PrefScroll.Size = UDim2.fromScale(1, 1)
+PrefScroll.BackgroundTransparency = 1
+PrefScroll.BorderSizePixel = 0
+PrefScroll.ScrollBarThickness = 4
+PrefScroll.ScrollBarImageColor3 = Color3.fromRGB(155, 70, 255)
+PrefScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+
+local PrefLayout = Instance.new("UIListLayout", PrefScroll)
+PrefLayout.Padding = UDim.new(0, 3)
+PrefLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local function RefreshPrefList()
+	for _, child in ipairs(PrefScroll:GetChildren()) do
+		if child:IsA("Frame") then child:Destroy() end
+	end
+
+	for i, name in ipairs(PriorityList) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, -8, 0, 26)
+		row.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
+		row.BorderSizePixel = 0
+		row.LayoutOrder = i
+		row.Parent = PrefScroll
+		Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+
+		local num = Instance.new("TextLabel", row)
+		num.Size = UDim2.fromOffset(28, 26)
+		num.BackgroundTransparency = 1
+		num.Text = tostring(i)
+		num.TextColor3 = Color3.fromRGB(190, 90, 255)
+		num.TextSize = 11
+		num.Font = Enum.Font.GothamBold
+		num.TextXAlignment = Enum.TextXAlignment.Center
+
+		local nameLbl = Instance.new("TextLabel", row)
+		nameLbl.Size = UDim2.new(1, -140, 1, 0)
+		nameLbl.Position = UDim2.fromOffset(32, 0)
+		nameLbl.BackgroundTransparency = 1
+		nameLbl.Text = name
+		nameLbl.TextColor3 = Color3.fromRGB(240, 240, 245)
+		nameLbl.TextSize = 11
+		nameLbl.Font = Enum.Font.Gotham
+		nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+		nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+		local function MakeSmallBtn(txt, x)
+			local b = Instance.new("TextButton", row)
+			b.Size = UDim2.fromOffset(28, 22)
+			b.Position = UDim2.new(1, x, 0.5, -11)
+			b.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+			b.BorderSizePixel = 0
+			b.Text = txt
+			b.TextColor3 = Color3.fromRGB(255, 255, 255)
+			b.TextSize = 12
+			b.Font = Enum.Font.GothamBold
+			Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+			return b
+		end
+
+		local upBtn = MakeSmallBtn("↑", -100)
+		local downBtn = MakeSmallBtn("↓", -68)
+		local remBtn = MakeSmallBtn("X", -36)
+
+		upBtn.MouseButton1Click:Connect(function()
+			if i > 1 then
+				PriorityList[i], PriorityList[i-1] = PriorityList[i-1], PriorityList[i]
+				RefreshPrefList()
+				if SaveConfig then SaveConfig() end
+				PrefStatus.Text = "Lista atualizada (" .. #PriorityList .. " itens)"
+			end
+		end)
+
+		downBtn.MouseButton1Click:Connect(function()
+			if i < #PriorityList then
+				PriorityList[i], PriorityList[i+1] = PriorityList[i+1], PriorityList[i]
+				RefreshPrefList()
+				if SaveConfig then SaveConfig() end
+				PrefStatus.Text = "Lista atualizada (" .. #PriorityList .. " itens)"
+			end
+		end)
+
+		remBtn.MouseButton1Click:Connect(function()
+			table.remove(PriorityList, i)
+			RefreshPrefList()
+			if SaveConfig then SaveConfig() end
+			PrefStatus.Text = "Removido. Agora: " .. #PriorityList .. " itens"
+		end)
+	end
+
+	PrefScroll.CanvasSize = UDim2.fromOffset(0, PrefLayout.AbsoluteContentSize.Y + 8)
+	PrefStatus.Text = "Lista carregada (" .. #PriorityList .. " itens)"
+end
+
+AddButton.MouseButton1Click:Connect(function()
+	local raw = AddBox.Text
+	if not raw or raw:match("^%s*$") then
+		PrefStatus.Text = "Digite um nome válido"
+		return
+	end
+	local clean = raw:match("^%s*(.-)%s*$")
+	local norm = NormalizeName(clean)
+
+	for _, existing in ipairs(PriorityList) do
+		if NormalizeName(existing) == norm then
+			PrefStatus.Text = "Já existe na lista!"
+			return
+		end
+	end
+
+	table.insert(PriorityList, clean)
+	AddBox.Text = ""
+	RefreshPrefList()
+	if SaveConfig then SaveConfig() end
+	PrefStatus.Text = "Adicionado: " .. clean
+end)
+
+local ResetDefaultBtn = Button("  RESTAURAR LISTA PADRÃO")
+ResetDefaultBtn.MouseButton1Click:Connect(function()
+	table.clear(PriorityList)
+	for _, name in ipairs(DefaultPriorityList) do
+		table.insert(PriorityList, name)
+	end
+	RefreshPrefList()
+	if SaveConfig then SaveConfig() end
+	PrefStatus.Text = "Lista padrão restaurada"
+end)
+
+RefreshPrefList()
+
+-- =========================================================
+-- ESP (usa a lista dinâmica)
+-- =========================================================
+local function ESPGetBrainrotName(Object)
+	local candidates = {Object.Name}
+	for _, attr in ipairs({"BrainrotName", "DisplayName", "AnimalName", "ModelName", "Brainrot"}) do
+		local v = Object:GetAttribute(attr)
+		if typeof(v) == "string" and v ~= "" then table.insert(candidates, v) end
+	end
+	for _, childName in ipairs({"BrainrotName", "DisplayName", "AnimalName", "ModelName", "Brainrot"}) do
+		local child = Object:FindFirstChild(childName, true)
+		if child then
+			if child:IsA("StringValue") and child.Value ~= "" then table.insert(candidates, child.Value)
+			elseif child:IsA("TextLabel") and child.Text ~= "" then table.insert(candidates, child.Text) end
+		end
+	end
+	for _, value in ipairs(candidates) do
+		local prio = GetPriorityOf(value)
+		if prio then return value, prio end
+	end
+	return nil, nil
+end
+
+local function ESPGetPart(Object)
+	if not Object then return nil end
+	if Object:IsA("BasePart") then return Object end
+	if Object:IsA("Model") then
+		return Object.PrimaryPart or Object:FindFirstChild("HumanoidRootPart", true) or Object:FindFirstChildWhichIsA("BasePart", true)
+	end
+	return Object:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function ESPIsSlot(Object)
+	local n = tonumber(string.match(Object.Name, "^%s*(%d+)%s*$"))
+	return n and n >= 1 and n <= 8, n
+end
+
+-- Nome tags em todos
+local ActiveNameTags = {}
+
+local function CreateNameTag(part, displayName)
+	if not part or not part.Parent then return nil end
+	local bill = Instance.new("BillboardGui")
+	bill.Name = "SnooBrainrotName"
+	bill.Adornee = part
+	bill.Size = UDim2.fromOffset(160, 32)
+	bill.StudsOffset = Vector3.new(0, 3.4, 0)
+	bill.AlwaysOnTop = true
+	bill.MaxDistance = 350
+	bill.LightInfluence = 0
+	bill.Parent = PlayerGui
+
+	local box = Instance.new("Frame", bill)
+	box.Size = UDim2.fromScale(1, 1)
+	box.BackgroundColor3 = Color3.fromRGB(25, 10, 40)
+	box.BackgroundTransparency = 0.25
+	box.BorderSizePixel = 0
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 8)
+	local stroke = Instance.new("UIStroke", box)
+	stroke.Color = Color3.fromRGB(160, 70, 255)
+	stroke.Thickness = 1.6
+	stroke.Transparency = 0.15
+
+	local label = Instance.new("TextLabel", box)
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Text = tostring(displayName or "?")
+	label.TextColor3 = Color3.fromRGB(230, 200, 255)
+	label.TextStrokeTransparency = 0.35
+	label.TextSize = 13
+	label.Font = Enum.Font.GothamBlack
+	return bill
+end
+
+local function ClearAllNameTags()
+	for obj, bill in pairs(ActiveNameTags) do
+		if bill and bill.Parent then bill:Destroy() end
+	end
+	table.clear(ActiveNameTags)
+end
+
+local function UpdateAllNameTags()
+	if not UltraESPEnabled then
+		ClearAllNameTags()
+		return
+	end
+	local Plots = workspace:FindFirstChild("Plots")
+	if not Plots then
+		ClearAllNameTags()
+		return
+	end
+	local found = {}
+	for _, obj in ipairs(Plots:GetDescendants()) do
+		if ESPIsSlot(obj) then
+			local candidates = {obj}
+			for _, child in ipairs(obj:GetChildren()) do
+				if child:IsA("Model") or child:IsA("BasePart") then table.insert(candidates, child) end
+			end
+			for _, cand in ipairs(candidates) do
+				local name, prio = ESPGetBrainrotName(cand)
+				local part = name and ESPGetPart(cand)
+				if name and part and part.Parent then
+					found[cand] = {Name = name, Part = part}
+				end
+			end
+		end
+	end
+	for obj, bill in pairs(ActiveNameTags) do
+		if not found[obj] or not obj.Parent then
+			if bill and bill.Parent then bill:Destroy() end
+			ActiveNameTags[obj] = nil
+		end
+	end
+	for obj, data in pairs(found) do
+		local existing = ActiveNameTags[obj]
+		if existing and existing.Parent then
+			if existing.Adornee ~= data.Part then existing.Adornee = data.Part end
+		else
+			local bill = CreateNameTag(data.Part, data.Name)
+			if bill then ActiveNameTags[obj] = bill end
+		end
+	end
+end
+
+local ESPBestCache, ESPBestCacheAt = nil, 0
+local ESP_SCAN_INTERVAL = 1.0
+
+local function ESPFindBestTarget(Force)
+	local now = os.clock()
+	if not Force and ESPBestCache and (now - ESPBestCacheAt) < ESP_SCAN_INTERVAL then
+		if ESPBestCache.Object and ESPBestCache.Object.Parent and ESPBestCache.Part and ESPBestCache.Part.Parent then
+			return ESPBestCache
+		end
+	end
+	local Plots = workspace:FindFirstChild("Plots")
+	if not Plots then ESPBestCache = nil return nil end
+
+	local Best, BestPriority = nil, math.huge
+	for _, obj in ipairs(Plots:GetDescendants()) do
+		if ESPIsSlot(obj) then
+			local name, prio = ESPGetBrainrotName(obj)
+			local part = name and ESPGetPart(obj)
+			if name and prio and part and prio < BestPriority then
+				BestPriority = prio
+				Best = {Name = name, Priority = prio, Part = part, Object = obj}
+			end
+			for _, cand in ipairs(obj:GetChildren()) do
+				if cand:IsA("Model") or cand:IsA("BasePart") then
+					local cName, cPrio = ESPGetBrainrotName(cand)
+					local cPart = cName and ESPGetPart(cand)
+					if cName and cPrio and cPart and cPrio < BestPriority then
+						BestPriority = cPrio
+						Best = {Name = cName, Priority = cPrio, Part = cPart, Object = cand}
+					end
+				end
+			end
+		end
+	end
+	ESPBestCache = Best
+	ESPBestCacheAt = now
+	return Best
+end
+
+ESPFindBestTargetReference = ESPFindBestTarget
+
+-- Beam mais visível
+BestBeam = Instance.new("Beam")
+BestBeam.Name = "SnooBestBeam"
+BestBeam.FaceCamera = true
+BestBeam.Enabled = false
+BestBeam.Width0 = 0.55
+BestBeam.Width1 = 0.35
+BestBeam.Segments = 36
+BestBeam.LightEmission = 1
+BestBeam.LightInfluence = 0
+BestBeam.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 60, 120)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 30, 80)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 20, 60))
+})
+BestBeam.Transparency = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 0.0),
+	NumberSequenceKeypoint.new(0.7, 0.05),
+	NumberSequenceKeypoint.new(1, 0.2)
+})
+BestBeam.Parent = workspace
+
+local PlayerAtt, TargetAtt, CurrentBeamPart = nil, nil, nil
+
+local function DestroyBeamAttachments()
+	if PlayerAtt then PlayerAtt:Destroy() PlayerAtt = nil end
+	if TargetAtt then TargetAtt:Destroy() TargetAtt = nil end
+	CurrentBeamPart = nil
+	BestBeam.Attachment0 = nil
+	BestBeam.Attachment1 = nil
+	BestBeam.Enabled = false
+	BestBeam.CurveSize0 = 0
+	BestBeam.CurveSize1 = 0
+end
+
+local function EnsurePlayerAttachment()
+	local root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+	if not root then DestroyBeamAttachments() return nil end
+	if PlayerAtt and PlayerAtt.Parent == root then return PlayerAtt end
+	if PlayerAtt then PlayerAtt:Destroy() end
+	PlayerAtt = Instance.new("Attachment")
+	PlayerAtt.Name = "SnooBest_Player"
+	PlayerAtt.Position = Vector3.new(0, 0.25, 0)
+	PlayerAtt.Parent = root
+	return PlayerAtt
+end
+
+local function EnsureTargetAttachment(part)
+	if not part or not part:IsA("BasePart") or not part.Parent then return nil end
+	if TargetAtt and TargetAtt.Parent == part then return TargetAtt end
+	if TargetAtt then TargetAtt:Destroy() end
+	TargetAtt = Instance.new("Attachment")
+	TargetAtt.Name = "SnooBest_Target"
+	TargetAtt.Position = Vector3.zero
+	TargetAtt.Parent = part
+	CurrentBeamPart = part
+	return TargetAtt
+end
+
+local function AttachBestBeam(targetPart)
+	local a0 = EnsurePlayerAttachment()
+	local a1 = EnsureTargetAttachment(targetPart)
+	if not a0 or not a1 then DestroyBeamAttachments() return false end
+	BestBeam.Attachment0 = a0
+	BestBeam.Attachment1 = a1
+	local root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+	if root then
+		local heightDiff = targetPart.Position.Y - root.Position.Y
+		local curve = math.clamp(heightDiff * 0.09, -14, 20)
+		BestBeam.CurveSize0 = curve * 0.5
+		BestBeam.CurveSize1 = curve
+	else
+		BestBeam.CurveSize0 = 0
+		BestBeam.CurveSize1 = 0
+	end
+	BestBeam.Enabled = true
+	return true
+end
+
+local BestNameBillboard = Instance.new("BillboardGui")
+BestNameBillboard.Name = "SnooBestName"
+BestNameBillboard.Size = UDim2.fromOffset(190, 38)
+BestNameBillboard.StudsOffset = Vector3.new(0, 4.0, 0)
+BestNameBillboard.AlwaysOnTop = true
+BestNameBillboard.MaxDistance = 400
+BestNameBillboard.Enabled = false
+BestNameBillboard.Parent = PlayerGui
+
+local BestNameBox = Instance.new("Frame", BestNameBillboard)
+BestNameBox.Size = UDim2.fromScale(1, 1)
+BestNameBox.BackgroundColor3 = Color3.fromRGB(70, 20, 130)
+BestNameBox.BackgroundTransparency = 0.12
+BestNameBox.BorderSizePixel = 0
+Instance.new("UICorner", BestNameBox).CornerRadius = UDim.new(0, 9)
+local BestNameStroke = Instance.new("UIStroke", BestNameBox)
+BestNameStroke.Color = Color3.fromRGB(220, 100, 255)
+BestNameStroke.Thickness = 2.2
+
+local BestNameLabel = Instance.new("TextLabel", BestNameBox)
+BestNameLabel.Size = UDim2.fromScale(1, 1)
+BestNameLabel.BackgroundTransparency = 1
+BestNameLabel.Text = ""
+BestNameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+BestNameLabel.TextStrokeTransparency = 0.3
+BestNameLabel.TextSize = 14
+BestNameLabel.Font = Enum.Font.GothamBlack
+
+local ESPCurrentTarget = nil
+local lastVisualUpdate = 0
+
+local function ESPUpdate()
+	if not UltraESPEnabled and not BestLineEnabled then
+		BestBeam.Enabled = false
+		BestNameBillboard.Enabled = false
+		return
+	end
+	local root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		BestBeam.Enabled = false
+		BestNameBillboard.Enabled = false
+		return
+	end
+	local target = BestLineEnabled and CurrentBestTarget or ESPCurrentTarget
+	if not target or not target.Object or not target.Object.Parent or not target.Part or not target.Part.Parent then
+		local found = ESPFindBestTarget(true)
+		ESPCurrentTarget = found
+		CurrentBestTarget = found
+		target = BestLineEnabled and CurrentBestTarget or ESPCurrentTarget
+	end
+	if not target or not target.Part then
+		BestBeam.Enabled = false
+		BestNameBillboard.Enabled = false
+		return
+	end
+	if CurrentBeamPart ~= target.Part or not PlayerAtt or PlayerAtt.Parent ~= root or not TargetAtt or TargetAtt.Parent ~= target.Part then
+		AttachBestBeam(target.Part)
+	else
+		local heightDiff = target.Part.Position.Y - root.Position.Y
+		local curve = math.clamp(heightDiff * 0.09, -14, 20)
+		BestBeam.CurveSize0 = curve * 0.5
+		BestBeam.CurveSize1 = curve
+		BestBeam.Enabled = true
+	end
+	BestNameBillboard.Adornee = target.Part
+	BestNameLabel.Text = "★ " .. tostring(target.Name or "MELHOR")
+	BestNameBillboard.Enabled = true
+end
+
+local function ESPSetEnabled(state)
+	UltraESPEnabled = state == true
+	if UltraESPEnabled then
+		ESPCurrentTarget = ESPFindBestTarget(true)
+		UpdateAllNameTags()
+	else
+		ESPCurrentTarget = nil
+		ClearAllNameTags()
+		if not BestLineEnabled then
+			CurrentBestTarget = nil
+			DestroyBeamAttachments()
+			BestNameBillboard.Enabled = false
+		end
+	end
+	if SaveConfig then SaveConfig() end
+end
+
+RunService.Heartbeat:Connect(function()
+	if not UltraESPEnabled and not BestLineEnabled then return end
+	local now = os.clock()
+	if now - lastVisualUpdate < 0.03 then return end
+	lastVisualUpdate = now
+	ESPUpdate()
+end)
+
+task.spawn(function()
+	while Gui and Gui.Parent do
+		task.wait(0.7)
+		if UltraESPEnabled then UpdateAllNameTags() end
+	end
+end)
+
+task.spawn(function()
+	while Gui and Gui.Parent do
+		task.wait(0.9)
+		if UltraESPEnabled or BestLineEnabled then
+			local found = ESPFindBestTarget(false)
+			if found then
+				CurrentBestTarget = found
+				ESPCurrentTarget = found
+			end
+		end
+	end
+end)
+
+Player.CharacterAdded:Connect(function()
+	task.wait(0.7)
+	DestroyBeamAttachments()
+	ClearAllNameTags()
+	if UltraESPEnabled or BestLineEnabled then
+		ESPCurrentTarget = ESPFindBestTarget(true)
+		CurrentBestTarget = ESPCurrentTarget
+		if UltraESPEnabled then UpdateAllNameTags() end
+	end
+end)
+
+-- Página ESP
+SelectPage("ESP")
+Section("ESP ULTRA V1.1")
+Description("Linha mais visível + Nome em TODOS os Brainrots da lista")
+Description("Use a aba PREF para editar a ordem de preferência")
+local ESPUltraButton = Button("  ESP ULTRA • " .. (UltraESPEnabled and "ON" or "OFF"))
+ESPUltraButton.MouseButton1Click:Connect(function()
+	ESPSetEnabled(not UltraESPEnabled)
+	ESPUltraButton.Text = "  ESP ULTRA • " .. (UltraESPEnabled and "ON" or "OFF")
+end)
+
+-- ==================== CONFIG ====================
+SelectPage("Config")
+Section("PERFORMANCE")
+Description("Modo Ultra reduz sombras, partículas, efeitos e qualidade.")
+local PerformanceButton = Button("  FPS BOOST " .. PerformanceMode:upper())
+PerformanceButton.MouseButton1Click:Connect(function()
+	local Modes = {"Balanced", "Ultra", "Extreme"}
+	local Index = table.find(Modes, PerformanceMode) or 2
+	PerformanceMode = Modes[Index % #Modes + 1]
+	if FPSBoostEnabled then
+		RemoveFPSBoost()
+		ApplyFPSBoost()
+	else
+		PerformanceButton.Text = "  FPS BOOST " .. PerformanceMode:upper()
+	end
+	SaveConfig()
+end)
+
+local FPSApplyButton = Button("  ATIVAR FPS BOOST AGORA")
+FPSApplyButton.MouseButton1Click:Connect(function()
+	if FPSBoostEnabled then RemoveFPSBoost() else ApplyFPSBoost() end
+	PerformanceButton.Text = "  FPS BOOST " .. PerformanceMode:upper()
+	FPSApplyButton.Text = FPSBoostEnabled and "  FPS BOOST ATIVO" or "  ATIVAR FPS BOOST AGORA"
+	SaveConfig()
+end)
+
+-- Restaura estados finais
+WalkBox.Text = tostring(WalkValue)
+JumpBox.Text = tostring(JumpValue)
+TravelBox.Text = tostring(TravelValue)
+TPBox.Text = tostring(TPValue)
+SpeedButton.Text = "  WALK SPEED • " .. (WalkEnabled and "ON" or "OFF")
+JumpButton.Text = "  JUMP POWER • " .. (JumpEnabled and "ON" or "OFF")
+NoclipButton.Text = "  NOCLIP • " .. (NoclipEnabled and "ON" or "OFF")
+AntiRagdollButton.Text = "  ANTI-RAGDOLL • " .. (AntiRagdollEnabled and "ON" or "OFF")
+PromptButton.Text = "  INSTANT PROMPT • " .. (InstantPromptEnabled and "ON" or "OFF")
+FPSButton.Text = "  FPS BOOST • " .. (FPSBoostEnabled and PerformanceMode:upper() or "OFF")
+AutoStealButton.Text = "  AUTO STEAL • " .. (AutoStealEnabled and "ON" or "OFF")
+InfiniteButton.Text = "  INFINITY JUMP • " .. (InfiniteJumpEnabled and "ON" or "OFF")
+SpamTPV1Button.Text = "  SPAM TP V1 • " .. (SpamTPV1Enabled and "ON" or "OFF")
+SpamTPV2Button.Text = "  SPAM TP V2 • " .. (SpamTPV2Enabled and "ON" or "OFF")
+SpamTPV1ButtonSmall.Text = "SPAM TP V1 • " .. (SpamTPV1Enabled and "ON" or "OFF")
+SpamTPV2ButtonSmall.Text = "SPAM TP V2 • " .. (SpamTPV2Enabled and "ON" or "OFF")
+
+if AutoStealEnabled then StartAutoSteal() end
+if SpamTPV1Enabled then StartSpamTPV1() end
+if SpamTPV2Enabled then StartSpamTPV2() end
+if UltraESPEnabled then ESPSetEnabled(true) end
+if InfiniteJumpEnabled then StartInfiniteJump() end
+if InstantPromptEnabled then UpdatePrompts() end
+if FPSBoostEnabled then
+	FPSBoostEnabled = false
+	ApplyFPSBoost()
+end
+SaveConfig()
+
+task.spawn(function()
+	while Gui.Parent do
+		task.wait(2)
+		SaveConfig()
+	end
+end)
+
+print("Snoo Hub V1.1 carregado com sucesso!")
